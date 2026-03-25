@@ -1,15 +1,14 @@
 package context2_test
 
 import (
+	"aioz-depin/internal/context2"
+	"aioz-depin/internal/testcontext"
 	"context"
 	"io"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"storj.io/common/context2"
-	"storj.io/common/testcontext"
 )
 
 func TestCustomCancel(t *testing.T) {
