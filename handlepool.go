@@ -52,7 +52,11 @@ type handleElement[K comparable, V any] struct {
 }
 
 // NewHandlePool creates a new HandlePool with the given capacity.
-func NewHandlePool[K comparable, V any](capacity int, opener func(key K) V, closer func(key K, value V)) *HandlePool[K, V] {
+func NewHandlePool[K comparable, V any](
+	capacity int,
+	opener func(key K) V,
+	closer func(key K, value V),
+) *HandlePool[K, V] {
 	return &HandlePool[K, V]{
 		capacity: capacity,
 		cache:    make(map[K]*list.Element),
