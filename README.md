@@ -1,93 +1,345 @@
-# Aioz Logger
+# aioz-logger
 
+A structured logging library for Go built on top of `log/slog`. Provides a consistent log format across stdout, file, and Graylog with non-blocking async dispatch, per-level sampling, and graceful shutdown.
 
+## Features
 
-## Getting started
+- **Unified format** — same `[timestamp] LEVEL msg key=value` text format (or JSON) across all outputs
+- **Non-blocking** — records are queued on a channel; callers never block on slow sinks
+- **Log sampling** — initial burst + every-Nth rate limiting per level per time window
+- **Buffered file output** — `bufio.Writer` with periodic flush, configurable buffer size, size-based rotation, and backup retention
+- **Graceful shutdown** — drains the async queue, flushes buffers, then closes files
+- **Graylog (GELF)** — ships structured logs to a Graylog GELF HTTP input
+- **Context-aware fields** — attach attributes to a `context.Context`; they appear on every log call using that context
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Requirements
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.internal/tuan.quang.tran/aioz-logger.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](https://gitlab.internal/tuan.quang.tran/aioz-logger/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- Go 1.21+
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```sh
+go get github.com/aioz-network/aioz-logger
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Quick start
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+```go
+package main
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+import (
+    "context"
+    "log/slog"
+    "time"
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+    logger "github.com/aioz-network/aioz-logger"
+)
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+func main() {
+    log, err := logger.New(logger.Config{
+        Level:  slog.LevelInfo,
+        Format: logger.FormatText,
+    })
+    if err != nil {
+        panic(err)
+    }
+    defer func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+        defer cancel()
+        log.Shutdown(ctx)
+    }()
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+    log.Info("server started", "port", 8080)
+    log.Warn("high memory usage", "used_mb", 512)
+    log.Error("request failed", "status", 500, "path", "/api/v1/users")
+}
+```
 
-## License
-For open source projects, say how it is licensed.
+Output (colorized on terminals):
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```
+[2026-05-08 12:00:00.000] INF server started port=8080
+[2026-05-08 12:00:00.001] WRN high memory usage used_mb=512
+[2026-05-08 12:00:00.002] ERR request failed status=500 path=/api/v1/users
+```
+
+## Configuration reference
+
+```go
+logger.Config{
+    // Minimum level to emit. Accepts slog.LevelDebug/Info/Warn/Error
+    // or a *slog.LevelVar for runtime level changes.
+    Level: slog.LevelInfo,
+
+    // FormatText: colorized "key=value" on stdout, plain text to file.
+    // FormatJSON: JSON objects on stdout and to file.
+    Format: logger.FormatText,
+
+    // Include caller file:line in every record.
+    AddSource: false,
+
+    // Channel capacity for async dispatch. 0 → 4096.
+    // Records are dropped (never blocked) when the channel is full.
+    AsyncBufferSize: 4096,
+
+    // Optional: rate-limit logs per level.
+    Sampling: &logger.SamplingConfig{...},
+
+    // Optional: write logs to a rotating file.
+    File: &logger.FileConfig{...},
+
+    // Optional: ship logs to Graylog.
+    Graylog: &logger.GraylogConfig{...},
+}
+```
+
+## Async dispatch
+
+All log calls return immediately. Records are processed by a single background goroutine that calls sinks (file, Graylog) sequentially. When the channel is full, new records are dropped rather than blocking the caller.
+
+```go
+log.Info("this returns immediately regardless of sink speed")
+
+// Check how many records were dropped since startup.
+fmt.Println("dropped:", log.Dropped())
+```
+
+## Log sampling
+
+Sampling limits throughput per log level using a sliding time window. Useful for high-frequency paths (e.g. per-request info logs) where full fidelity is unnecessary.
+
+```go
+log, _ := logger.New(logger.Config{
+    Level: slog.LevelDebug,
+    Sampling: &logger.SamplingConfig{
+        Tick:       time.Second, // window size
+        Initial:    100,         // first 100 records per window pass unconditionally
+        Thereafter: 10,          // after that, every 10th record passes
+    },
+})
+```
+
+Sampling is applied per level independently, so a burst of errors does not consume the info quota.
+
+## File output
+
+```go
+log, _ := logger.New(logger.Config{
+    File: &logger.FileConfig{
+        Path:   "/var/log/myapp/app.log",
+        Format: logger.FormatJSON,
+
+        // Write buffer size. bufio flushes automatically when full,
+        // bounding peak memory usage to this value. Default: 64 KB.
+        BufferSize: 64 * 1024,
+
+        // How often the buffer is flushed to disk. Default: 5s.
+        FlushInterval: 5 * time.Second,
+
+        // Rotate when the file reaches this size. Default: 100 MB.
+        MaxSize: 100 * 1024 * 1024,
+
+        // Number of rotated backup files to keep (app.log.1, app.log.2, …).
+        // 0 = unlimited backups with timestamp suffixes.
+        MaxBackups: 7,
+    },
+})
+```
+
+### Rotation behaviour
+
+When the file reaches `MaxSize`:
+
+1. The buffer is flushed and the current file is closed.
+2. If `MaxBackups > 0`: `app.log.N` (oldest) is deleted, backups are shifted (`app.log.N-1` → `app.log.N`), then the current file is renamed to `app.log.1`.
+3. If `MaxBackups == 0`: the current file is renamed with a UTC timestamp suffix (e.g. `app.log.20260508-120000.000`).
+4. A new `app.log` is opened.
+
+### Graceful shutdown
+
+Always call `Shutdown` before exiting to flush buffered data and close files:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := log.Shutdown(ctx); err != nil {
+    fmt.Fprintln(os.Stderr, "logger shutdown:", err)
+}
+```
+
+`Shutdown` drains the async queue first (all queued records are written to sinks), then flushes and closes the file. No records are lost as long as the context does not expire.
+
+## Graylog
+
+```go
+log, _ := logger.New(logger.Config{
+    Graylog: &logger.GraylogConfig{
+        URL:      "http://graylog.internal:12201/gelf",
+        Facility: "backend",
+        Service:  "payment-service",
+        Timeout:  5 * time.Second,
+    },
+})
+```
+
+Records are sent as GELF 1.1 JSON over HTTP. All `slog` attributes are forwarded as additional GELF fields (prefixed with `_`). ANSI color codes are stripped automatically. Graylog HTTP calls run inside the async consumer goroutine, so they never block log callers.
+
+### Custom index fields
+
+By default every log attribute is forwarded to Graylog. Use `IndexFields` to
+restrict which attributes are sent — useful for keeping the Graylog index lean
+and avoiding high-cardinality fields (e.g. full stack traces, large payloads).
+
+```go
+Graylog: &logger.GraylogConfig{
+    URL:     "http://graylog.internal:12201/gelf",
+    Service: "api-server",
+    // Only these attributes are forwarded as GELF additional fields.
+    // Everything else (stacktrace, request_body, …) is omitted.
+    IndexFields: []string{"trace_id", "user_id", "env", "region", "status"},
+},
+```
+
+When `IndexFields` is empty (the default), all attributes are forwarded.
+
+## Context-aware fields
+
+Attach fields to a `context.Context` once and they appear on every log call that uses that context — useful for per-request trace IDs:
+
+```go
+ctx := logger.WithContext(context.Background(),
+    slog.String("trace_id", "abc-123"),
+    slog.String("user_id", "u-456"),
+)
+
+log.InfoContext(ctx, "payment processed", "amount", 99.99)
+// → INF payment processed trace_id=abc-123 user_id=u-456 amount=99.99
+```
+
+Fields accumulate; calling `WithContext` again appends to the existing set.
+
+## Full example
+
+```go
+package main
+
+import (
+    "context"
+    "log/slog"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+
+    logger "github.com/aioz-network/aioz-logger"
+)
+
+func main() {
+    log, err := logger.New(logger.Config{
+        Level:           slog.LevelDebug,
+        Format:          logger.FormatText,
+        AddSource:       false,
+        AsyncBufferSize: 8192,
+
+        Sampling: &logger.SamplingConfig{
+            Tick:       time.Second,
+            Initial:    200,
+            Thereafter: 20,
+        },
+
+        File: &logger.FileConfig{
+            Path:          "app.log",
+            Format:        logger.FormatJSON,
+            BufferSize:    128 * 1024,
+            FlushInterval: 3 * time.Second,
+            MaxSize:       50 * 1024 * 1024,
+            MaxBackups:    5,
+        },
+
+        Graylog: &logger.GraylogConfig{
+            URL:      "http://graylog.internal:12201/gelf",
+            Facility: "myapp",
+            Service:  "api-server",
+            Timeout:  3 * time.Second,
+        },
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    // Attach request-scoped fields via context.
+    ctx := logger.WithContext(context.Background(),
+        slog.String("trace_id", "req-001"),
+    )
+
+    log.InfoContext(ctx, "server started", "port", 8080)
+    log.DebugContext(ctx, "config loaded", "env", "production")
+
+    // Create a child logger with permanent fields.
+    dbLog := log.With("component", "database")
+    dbLog.Info("connected", "host", "postgres:5432")
+
+    // Wait for signal then shut down cleanly.
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+
+    log.Info("shutting down", "dropped_records", log.Dropped())
+
+    shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    if err := log.Shutdown(shutCtx); err != nil {
+        os.Exit(1)
+    }
+}
+```
+
+## Critical logs with stack trace
+
+`LevelCritical` sits one step above `Error`. The `Critical` and `CriticalContext`
+helpers capture a full stack trace at the call site and attach it as the
+`stacktrace` attribute before the record is queued.
+
+```go
+log.Critical("database connection lost", "host", "postgres:5432")
+// Console output:
+// [2026-05-08 12:00:00.000] CRT database connection lost host=postgres:5432
+// stacktrace:
+// main.connectDB
+//   /app/db.go:87
+// main.main
+//   /app/main.go:34
+```
+
+The `stacktrace` field is forwarded to the file sink and Graylog as a regular
+attribute. In Graylog, `LevelCritical` maps to syslog severity **2** (critical),
+which triggers alert streams if configured.
+
+For attaching a stack trace to any other log level, use `logger.Stack()`:
+
+```go
+log.Error("unexpected nil", "stacktrace", logger.Stack(), "component", "router")
+```
+
+## Dynamic log level
+
+Pass a `*slog.LevelVar` to change the minimum level at runtime without restarting:
+
+```go
+level := new(slog.LevelVar) // starts at Info
+level.Set(slog.LevelDebug)
+
+log, _ := logger.New(logger.Config{Level: level})
+
+// Later, in a handler or admin endpoint:
+level.Set(slog.LevelWarn)
+```
+
+## Output formats
+
+| Format | Console | File |
+|--------|---------|------|
+| `FormatText` | Colorized `[timestamp] LEVEL msg key=value …` | Same, no ANSI codes |
+| `FormatJSON` | `{"time":"…","level":"…","msg":"…","key":"value"}` | Same |
+
+Both formats use the same key names, so switching between them does not require changes to log consumers.
