@@ -1,6 +1,6 @@
 # aioz-logger
 
-A structured logging library for Go built on top of `log/slog`. Provides a consistent log format across stdout, file, and Graylog with non-blocking async dispatch, per-level sampling, and graceful shutdown.
+A `slog.Handler` for Go that adds async dispatch, buffered file output, Graylog (GELF) shipping, and per-level sampling on top of the standard `log/slog` pipeline. No custom logger type — create the handler, pass it to `slog.New` or `slog.SetDefault`, and use the standard `slog` API everywhere.
 
 ## Features
 
@@ -19,7 +19,7 @@ A structured logging library for Go built on top of `log/slog`. Provides a consi
 ## Installation
 
 ```sh
-go get github.com/aioz-network/aioz-logger
+go get gitlab.internal/tuan.quang.tran/aioz-log
 ```
 
 ## Quick start
@@ -32,11 +32,11 @@ import (
     "log/slog"
     "time"
 
-    logger "github.com/aioz-network/aioz-logger"
+    logger "gitlab.internal/tuan.quang.tran/aioz-log"
 )
 
 func main() {
-    log, err := logger.New(logger.Config{
+    h, err := logger.New(logger.Config{
         Level:  slog.LevelInfo,
         Format: logger.FormatText,
     })
@@ -46,12 +46,14 @@ func main() {
     defer func() {
         ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
         defer cancel()
-        log.Shutdown(ctx)
+        h.Shutdown(ctx)
     }()
 
-    log.Info("server started", "port", 8080)
-    log.Warn("high memory usage", "used_mb", 512)
-    log.Error("request failed", "status", 500, "path", "/api/v1/users")
+    slog.SetDefault(slog.New(h))
+
+    slog.Info("server started", "port", 8080)
+    slog.Warn("high memory usage", "used_mb", 512)
+    slog.Error("request failed", "status", 500, "path", "/api/v1/users")
 }
 ```
 
@@ -93,15 +95,25 @@ logger.Config{
 }
 ```
 
+## Handler API
+
+`Handler` implements `slog.Handler` and additionally exposes:
+
+| Method | Description |
+|--------|-------------|
+| `Shutdown(ctx) error` | Drains the async queue, flushes and closes all sinks |
+| `Dropped() uint64` | Count of records dropped due to a full async buffer |
+
+Keep the `*Handler` reference for lifecycle management; use `*slog.Logger` (from `slog.New(h)`) for logging.
+
 ## Async dispatch
 
 All log calls return immediately. Records are processed by a single background goroutine that calls sinks (file, Graylog) sequentially. When the channel is full, new records are dropped rather than blocking the caller.
 
 ```go
-log.Info("this returns immediately regardless of sink speed")
+slog.Info("this returns immediately regardless of sink speed")
 
-// Check how many records were dropped since startup.
-fmt.Println("dropped:", log.Dropped())
+fmt.Println("dropped:", h.Dropped())
 ```
 
 ## Log sampling
@@ -109,7 +121,7 @@ fmt.Println("dropped:", log.Dropped())
 Sampling limits throughput per log level using a sliding time window. Useful for high-frequency paths (e.g. per-request info logs) where full fidelity is unnecessary.
 
 ```go
-log, _ := logger.New(logger.Config{
+h, _ := logger.New(logger.Config{
     Level: slog.LevelDebug,
     Sampling: &logger.SamplingConfig{
         Tick:       time.Second, // window size
@@ -124,7 +136,7 @@ Sampling is applied per level independently, so a burst of errors does not consu
 ## File output
 
 ```go
-log, _ := logger.New(logger.Config{
+h, _ := logger.New(logger.Config{
     File: &logger.FileConfig{
         Path:   "/var/log/myapp/app.log",
         Format: logger.FormatJSON,
@@ -162,7 +174,7 @@ Always call `Shutdown` before exiting to flush buffered data and close files:
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 defer cancel()
-if err := log.Shutdown(ctx); err != nil {
+if err := h.Shutdown(ctx); err != nil {
     fmt.Fprintln(os.Stderr, "logger shutdown:", err)
 }
 ```
@@ -172,7 +184,7 @@ if err := log.Shutdown(ctx); err != nil {
 ## Graylog
 
 ```go
-log, _ := logger.New(logger.Config{
+h, _ := logger.New(logger.Config{
     Graylog: &logger.GraylogConfig{
         URL:      "http://graylog.internal:12201/gelf",
         Facility: "backend",
@@ -186,9 +198,7 @@ Records are sent as GELF 1.1 JSON over HTTP. All `slog` attributes are forwarded
 
 ### Custom index fields
 
-By default every log attribute is forwarded to Graylog. Use `IndexFields` to
-restrict which attributes are sent — useful for keeping the Graylog index lean
-and avoiding high-cardinality fields (e.g. full stack traces, large payloads).
+By default every log attribute is forwarded to Graylog. Use `IndexFields` to restrict which attributes are sent — useful for keeping the Graylog index lean and avoiding high-cardinality fields (e.g. full stack traces, large payloads).
 
 ```go
 Graylog: &logger.GraylogConfig{
@@ -212,11 +222,141 @@ ctx := logger.WithContext(context.Background(),
     slog.String("user_id", "u-456"),
 )
 
-log.InfoContext(ctx, "payment processed", "amount", 99.99)
+slog.InfoContext(ctx, "payment processed", "amount", 99.99)
 // → INF payment processed trace_id=abc-123 user_id=u-456 amount=99.99
 ```
 
 Fields accumulate; calling `WithContext` again appends to the existing set.
+
+## Critical logs with stack trace
+
+`LevelCritical` sits one step above `Error`. `Critical` and `CriticalContext` capture a full stack trace at the call site and attach it as the `stacktrace` attribute before the record is queued.
+
+```go
+logger.Critical(slog.Default(), "database connection lost", "host", "postgres:5432")
+// Console output:
+// [2026-05-08 12:00:00.000] CRT database connection lost host=postgres:5432
+// stacktrace:
+// main.connectDB
+//	/app/db.go:87
+// main.main
+//	/app/main.go:34
+
+// With a child logger and context:
+ctx := context.Background()
+dbLog := slog.Default().With("component", "database")
+logger.CriticalContext(ctx, dbLog, "connection lost")
+```
+
+The `stacktrace` field is forwarded to the file sink and Graylog as a regular attribute. In Graylog, `LevelCritical` maps to syslog severity **2** (critical), which triggers alert streams if configured.
+
+`logger.LevelCritical` is a regular `slog.Level` constant, so it works with the standard slog API too:
+
+```go
+slog.Log(ctx, logger.LevelCritical, "manual critical", "key", "val")
+slog.Default().Enabled(ctx, logger.LevelCritical)
+```
+
+For attaching a stack trace to any other log level, use `logger.Stack()`:
+
+```go
+slog.Error("unexpected nil", "stacktrace", logger.Stack(), "component", "router")
+```
+
+## Dynamic log level
+
+Pass a `*slog.LevelVar` to change the minimum level at runtime without restarting:
+
+```go
+level := new(slog.LevelVar) // starts at Info
+level.Set(slog.LevelDebug)
+
+h, _ := logger.New(logger.Config{Level: level})
+slog.SetDefault(slog.New(h))
+
+// Later, in an admin endpoint:
+level.Set(slog.LevelWarn)
+```
+
+## Output formats
+
+| Format | Console | File |
+|--------|---------|------|
+| `FormatText` | Colorized `[timestamp] LEVEL msg key=value …` | Same, no ANSI codes |
+| `FormatJSON` | `{"time":"…","level":"…","msg":"…","key":"value"}` | Same |
+
+Both formats use the same key names, so switching between them does not require changes to log consumers.
+
+## Integrations
+
+### GORM
+
+Implement GORM's `logger.Interface` backed by a `*slog.Logger`:
+
+```go
+import (
+    "context"
+    "errors"
+    "fmt"
+    "log/slog"
+    "time"
+
+    "gorm.io/gorm"
+    gormlogger "gorm.io/gorm/logger"
+)
+
+type GormLogger struct {
+    log   *slog.Logger
+    level gormlogger.LogLevel
+}
+
+func NewGormLogger(log *slog.Logger) *GormLogger {
+    return &GormLogger{log: log, level: gormlogger.Warn}
+}
+
+func (l *GormLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
+    return &GormLogger{log: l.log, level: level}
+}
+
+func (l *GormLogger) Info(ctx context.Context, msg string, args ...any) {
+    l.log.InfoContext(ctx, fmt.Sprintf(msg, args...))
+}
+
+func (l *GormLogger) Warn(ctx context.Context, msg string, args ...any) {
+    l.log.WarnContext(ctx, fmt.Sprintf(msg, args...))
+}
+
+func (l *GormLogger) Error(ctx context.Context, msg string, args ...any) {
+    l.log.ErrorContext(ctx, fmt.Sprintf(msg, args...))
+}
+
+func (l *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+    elapsed := time.Since(begin)
+    sql, rows := fc()
+    attrs := []slog.Attr{
+        slog.String("sql", sql),
+        slog.Int64("rows", rows),
+        slog.Duration("elapsed", elapsed),
+    }
+    if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+        attrs = append(attrs, slog.Any("error", err))
+        l.log.LogAttrs(ctx, slog.LevelError, "query", attrs...)
+        return
+    }
+    l.log.LogAttrs(ctx, slog.LevelDebug, "query", attrs...)
+}
+```
+
+Usage:
+
+```go
+h, _ := logger.New(logger.Config{...})
+slog.SetDefault(slog.New(h))
+
+db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+    Logger: NewGormLogger(slog.Default()),
+})
+```
 
 ## Full example
 
@@ -225,20 +365,20 @@ package main
 
 import (
     "context"
+    "fmt"
     "log/slog"
     "os"
     "os/signal"
     "syscall"
     "time"
 
-    logger "github.com/aioz-network/aioz-logger"
+    logger "gitlab.internal/tuan.quang.tran/aioz-log"
 )
 
 func main() {
-    log, err := logger.New(logger.Config{
+    h, err := logger.New(logger.Config{
         Level:           slog.LevelDebug,
         Format:          logger.FormatText,
-        AddSource:       false,
         AsyncBufferSize: 8192,
 
         Sampling: &logger.SamplingConfig{
@@ -266,80 +406,32 @@ func main() {
     if err != nil {
         panic(err)
     }
+    slog.SetDefault(slog.New(h))
 
     // Attach request-scoped fields via context.
     ctx := logger.WithContext(context.Background(),
         slog.String("trace_id", "req-001"),
     )
 
-    log.InfoContext(ctx, "server started", "port", 8080)
-    log.DebugContext(ctx, "config loaded", "env", "production")
+    slog.InfoContext(ctx, "server started", "port", 8080)
+    slog.DebugContext(ctx, "config loaded", "env", "production")
 
-    // Create a child logger with permanent fields.
-    dbLog := log.With("component", "database")
-    dbLog.Info("connected", "host", "postgres:5432")
+    // Child logger with permanent fields — standard slog pattern.
+    dbLog := slog.Default().With("component", "database")
+    dbLog.InfoContext(ctx, "connected", "host", "postgres:5432")
+    logger.CriticalContext(ctx, dbLog, "connection lost")
 
     // Wait for signal then shut down cleanly.
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
     <-quit
 
-    log.Info("shutting down", "dropped_records", log.Dropped())
+    fmt.Println("dropped records:", h.Dropped())
 
     shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
-    if err := log.Shutdown(shutCtx); err != nil {
+    if err := h.Shutdown(shutCtx); err != nil {
         os.Exit(1)
     }
 }
 ```
-
-## Critical logs with stack trace
-
-`LevelCritical` sits one step above `Error`. The `Critical` and `CriticalContext`
-helpers capture a full stack trace at the call site and attach it as the
-`stacktrace` attribute before the record is queued.
-
-```go
-log.Critical("database connection lost", "host", "postgres:5432")
-// Console output:
-// [2026-05-08 12:00:00.000] CRT database connection lost host=postgres:5432
-// stacktrace:
-// main.connectDB
-//   /app/db.go:87
-// main.main
-//   /app/main.go:34
-```
-
-The `stacktrace` field is forwarded to the file sink and Graylog as a regular
-attribute. In Graylog, `LevelCritical` maps to syslog severity **2** (critical),
-which triggers alert streams if configured.
-
-For attaching a stack trace to any other log level, use `logger.Stack()`:
-
-```go
-log.Error("unexpected nil", "stacktrace", logger.Stack(), "component", "router")
-```
-
-## Dynamic log level
-
-Pass a `*slog.LevelVar` to change the minimum level at runtime without restarting:
-
-```go
-level := new(slog.LevelVar) // starts at Info
-level.Set(slog.LevelDebug)
-
-log, _ := logger.New(logger.Config{Level: level})
-
-// Later, in a handler or admin endpoint:
-level.Set(slog.LevelWarn)
-```
-
-## Output formats
-
-| Format | Console | File |
-|--------|---------|------|
-| `FormatText` | Colorized `[timestamp] LEVEL msg key=value …` | Same, no ANSI codes |
-| `FormatJSON` | `{"time":"…","level":"…","msg":"…","key":"value"}` | Same |
-
-Both formats use the same key names, so switching between them does not require changes to log consumers.

@@ -37,15 +37,22 @@ type Config struct {
 	Graylog *GraylogConfig
 }
 
-// Logger wraps *slog.Logger and owns the lifecycle of its backends.
-type Logger struct {
-	*slog.Logger
+// Handler is a slog.Handler that adds async dispatch, buffered file output,
+// Graylog shipping, and per-level sampling on top of the standard slog pipeline.
+//
+// Typical usage:
+//
+//	h, err := logger.New(cfg)
+//	slog.SetDefault(slog.New(h))
+//	defer h.Shutdown(ctx)
+type Handler struct {
+	inner slog.Handler
 	async *asyncHandler
 	sinks []Sink
 }
 
-// New constructs a Logger from cfg. Always call Shutdown before process exit.
-func New(cfg Config) (*Logger, error) {
+// New constructs a Handler from cfg. Always call Shutdown before process exit.
+func New(cfg Config) (*Handler, error) {
 	if cfg.Level == nil {
 		cfg.Level = slog.LevelInfo
 	}
@@ -75,20 +82,40 @@ func New(cfg Config) (*Logger, error) {
 
 	async := newAsyncHandler(h, cfg.AsyncBufferSize)
 
-	return &Logger{
-		Logger: slog.New(async),
-		async:  async,
-		sinks:  sinks,
+	return &Handler{
+		inner: async,
+		async: async,
+		sinks: sinks,
 	}, nil
+}
+
+// Enabled implements slog.Handler.
+func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.inner.Enabled(ctx, level)
+}
+
+// Handle implements slog.Handler.
+func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
+	return h.inner.Handle(ctx, r)
+}
+
+// WithAttrs implements slog.Handler.
+func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &Handler{inner: h.inner.WithAttrs(attrs), async: h.async, sinks: h.sinks}
+}
+
+// WithGroup implements slog.Handler.
+func (h *Handler) WithGroup(name string) slog.Handler {
+	return &Handler{inner: h.inner.WithGroup(name), async: h.async, sinks: h.sinks}
 }
 
 // Shutdown drains the async queue then flushes and closes all sinks.
 // Pass a context with your shutdown deadline.
-func (l *Logger) Shutdown(ctx context.Context) error {
-	if err := l.async.shutdown(ctx); err != nil {
+func (h *Handler) Shutdown(ctx context.Context) error {
+	if err := h.async.shutdown(ctx); err != nil {
 		return fmt.Errorf("logger: async drain: %w", err)
 	}
-	for _, s := range l.sinks {
+	for _, s := range h.sinks {
 		if err := s.Close(); err != nil {
 			return fmt.Errorf("logger: sink close: %w", err)
 		}
@@ -97,8 +124,8 @@ func (l *Logger) Shutdown(ctx context.Context) error {
 }
 
 // Dropped returns the number of records dropped because the async buffer was full.
-func (l *Logger) Dropped() uint64 {
-	return l.async.Dropped()
+func (h *Handler) Dropped() uint64 {
+	return h.async.Dropped()
 }
 
 // ctxKey is the unexported context key for per-request slog attrs.
