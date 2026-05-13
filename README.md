@@ -131,7 +131,25 @@ h, _ := logger.New(logger.Config{
 })
 ```
 
-Sampling is applied per level independently, so a burst of errors does not consume the info quota.
+Sampling is applied per level independently — a burst of errors does not consume the info quota.
+
+### Per-level overrides
+
+Use `Levels` to apply different parameters to specific log levels. Any zero field in a level entry inherits the global value.
+
+```go
+Sampling: &logger.SamplingConfig{
+    Tick:       time.Second,
+    Initial:    100,
+    Thereafter: 100,
+
+    Levels: map[slog.Level]logger.LevelSamplingConfig{
+        slog.LevelDebug: {Initial: 10, Thereafter: 5},    // aggressive: 10/s then every 5th
+        slog.LevelWarn:  {Tick: 5 * time.Second, Initial: 500}, // wider window for warnings
+        slog.LevelError: {Initial: 10_000, Thereafter: 1}, // near-unlimited for errors
+    },
+},
+```
 
 ## File output
 
@@ -214,7 +232,11 @@ When `IndexFields` is empty (the default), all attributes are forwarded.
 
 ## Context-aware fields
 
-Attach fields to a `context.Context` once and they appear on every log call that uses that context — useful for per-request trace IDs:
+Attach fields to a `context.Context` once and they appear on every log call that uses that context — useful for per-request trace IDs.
+
+### WithContext
+
+Accepts `slog.Attr` values explicitly:
 
 ```go
 ctx := logger.WithContext(context.Background(),
@@ -226,7 +248,24 @@ slog.InfoContext(ctx, "payment processed", "amount", 99.99)
 // → INF payment processed trace_id=abc-123 user_id=u-456 amount=99.99
 ```
 
-Fields accumulate; calling `WithContext` again appends to the existing set.
+### AppendContext
+
+A convenience wrapper that accepts alternating key-value pairs (the same style as `slog.Info`):
+
+```go
+ctx = logger.AppendContext(ctx, "trace_id", "abc-123", "user_id", "u-456")
+
+// slog.Attr values are also accepted inline:
+ctx = logger.AppendContext(ctx, "trace_id", "abc-123", slog.Int("attempt", 3))
+```
+
+Both functions accumulate — calling either multiple times appends to the existing set rather than replacing it:
+
+```go
+ctx = logger.AppendContext(ctx, "trace_id", traceID)
+ctx = logger.AppendContext(ctx, "user_id", userID)
+// both fields appear on every subsequent log call using ctx
+```
 
 ## Critical logs with stack trace
 
