@@ -19,16 +19,19 @@ type asyncHandler struct {
 	inner   slog.Handler
 	ch      chan asyncEntry
 	wg      *sync.WaitGroup
-	stopped *uint32
+	mu      *sync.RWMutex // guards closed; shared across WithAttrs/WithGroup clones
+	closed  *bool
 	dropped *uint64
 }
 
 func newAsyncHandler(inner slog.Handler, bufSize int) *asyncHandler {
+	closed := false
 	h := &asyncHandler{
 		inner:   inner,
 		ch:      make(chan asyncEntry, bufSize),
 		wg:      new(sync.WaitGroup),
-		stopped: new(uint32),
+		mu:      new(sync.RWMutex),
+		closed:  &closed,
 		dropped: new(uint64),
 	}
 	h.wg.Add(1)
@@ -50,7 +53,9 @@ func (h *asyncHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // Handle enqueues r for asynchronous processing. Returns immediately.
 // If the channel is full, the record is silently dropped and Dropped() increments.
 func (h *asyncHandler) Handle(ctx context.Context, r slog.Record) error {
-	if atomic.LoadUint32(h.stopped) == 1 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if *h.closed {
 		return nil
 	}
 	clone := r.Clone()
@@ -67,7 +72,8 @@ func (h *asyncHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		inner:   h.inner.WithAttrs(attrs),
 		ch:      h.ch,
 		wg:      h.wg,
-		stopped: h.stopped,
+		mu:      h.mu,
+		closed:  h.closed,
 		dropped: h.dropped,
 	}
 }
@@ -77,7 +83,8 @@ func (h *asyncHandler) WithGroup(name string) slog.Handler {
 		inner:   h.inner.WithGroup(name),
 		ch:      h.ch,
 		wg:      h.wg,
-		stopped: h.stopped,
+		mu:      h.mu,
+		closed:  h.closed,
 		dropped: h.dropped,
 	}
 }
@@ -85,8 +92,13 @@ func (h *asyncHandler) WithGroup(name string) slog.Handler {
 // shutdown stops accepting new records, drains the queue, and waits for the
 // consumer goroutine to finish. Blocks until ctx expires or drain completes.
 func (h *asyncHandler) shutdown(ctx context.Context) error {
-	atomic.StoreUint32(h.stopped, 1)
+	// Hold the write lock while closing so no Handle call can send to a closed
+	// channel, and no in-flight send is racing against the close.
+	h.mu.Lock()
+	*h.closed = true
 	close(h.ch)
+	h.mu.Unlock()
+
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
