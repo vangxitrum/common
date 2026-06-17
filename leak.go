@@ -101,7 +101,12 @@ func (parent *Resource) Close() error {
 	}
 
 	for r, count := range unique {
-		fmt.Fprintf(&s, "--- Unclosed %s opened from (count=%d) ---\n", r.name, count)
+		fmt.Fprintf(
+			&s,
+			"--- Unclosed %s opened from (count=%d) ---\n",
+			r.name,
+			count,
+		)
 		fmt.Fprint(&s, r.callers.String())
 	}
 
