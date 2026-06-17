@@ -58,7 +58,8 @@ func TruncateToHourInNano(t time.Time) int64 {
 func UTCEndOfMonth(now time.Time) time.Time {
 	now = now.UTC()
 	y, m, _ := now.Date()
-	return time.Date(y, m+1, 1, 0, 0, 0, 0, &time.Location{}).Add(-time.Nanosecond)
+	return time.Date(y, m+1, 1, 0, 0, 0, 0, &time.Location{}).
+		Add(-time.Nanosecond)
 }
 
 // UTCBeginOfMonth returns utc begin of month (f.e. to get first day in month at 00h00m).

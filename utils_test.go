@@ -1,9 +1,10 @@
 package date_test
 
 import (
-	"aioz-depin/internal/date"
 	"testing"
 	"time"
+
+	"aioz-depin/internal/date"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,16 +14,50 @@ func TestMonthBoundary(t *testing.T) {
 	now := time.Now()
 
 	start, end := date.MonthBoundary(now)
-	assert.Equal(t, start, time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()))
-	assert.Equal(t, end, time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, -1, now.Location()))
+	assert.Equal(
+		t,
+		start,
+		time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()),
+	)
+	assert.Equal(
+		t,
+		end,
+		time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, -1, now.Location()),
+	)
 }
 
 func TestDayBoundary(t *testing.T) {
 	now := time.Now()
 
 	start, end := date.DayBoundary(now)
-	assert.Equal(t, start, time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()))
-	assert.Equal(t, end, time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, -1, now.Location()))
+	assert.Equal(
+		t,
+		start,
+		time.Date(
+			now.Year(),
+			now.Month(),
+			now.Day(),
+			0,
+			0,
+			0,
+			0,
+			now.Location(),
+		),
+	)
+	assert.Equal(
+		t,
+		end,
+		time.Date(
+			now.Year(),
+			now.Month(),
+			now.Day()+1,
+			0,
+			0,
+			0,
+			-1,
+			now.Location(),
+		),
+	)
 }
 
 func TestPeriodToTime(t *testing.T) {
@@ -30,11 +65,20 @@ func TestPeriodToTime(t *testing.T) {
 		period     string
 		periodTime time.Time
 	}{
-		{"2020-01", time.Date(2020, 01, 01, 0, 0, 0, 0, &time.Location{})},
-		{"2020-02-01", time.Date(2020, 02, 01, 0, 0, 0, 0, &time.Location{})},
-		{"2019-11-04 14:14:14", time.Date(2019, 11, 01, 0, 0, 0, 0, &time.Location{})},
-		{"2020-03-04T15:04:05-0700", time.Date(2020, 03, 01, 0, 0, 0, 0, &time.Location{})},
-		{"2020-04gasgahsgnasjfasgjs", time.Date(2020, 04, 01, 0, 0, 0, 0, &time.Location{})},
+		{"2020-01", time.Date(2020, 0o1, 0o1, 0, 0, 0, 0, &time.Location{})},
+		{"2020-02-01", time.Date(2020, 0o2, 0o1, 0, 0, 0, 0, &time.Location{})},
+		{
+			"2019-11-04 14:14:14",
+			time.Date(2019, 11, 0o1, 0, 0, 0, 0, &time.Location{}),
+		},
+		{
+			"2020-03-04T15:04:05-0700",
+			time.Date(2020, 0o3, 0o1, 0, 0, 0, 0, &time.Location{}),
+		},
+		{
+			"2020-04gasgahsgnasjfasgjs",
+			time.Date(2020, 0o4, 0o1, 0, 0, 0, 0, &time.Location{}),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -65,12 +109,36 @@ func TestMonthsBetweenDates(t *testing.T) {
 		to           time.Time
 		monthsAmount int
 	}{
-		{time.Date(2020, 2, 13, 0, 0, 0, 0, &time.Location{}), time.Date(2020, 05, 13, 0, 0, 0, 0, &time.Location{}), 3},
-		{time.Date(2015, 7, 30, 0, 0, 0, 0, &time.Location{}), time.Date(2020, 05, 13, 0, 0, 0, 0, &time.Location{}), 58},
-		{time.Date(2017, 1, 28, 0, 0, 0, 0, &time.Location{}), time.Date(2020, 05, 13, 0, 0, 0, 0, &time.Location{}), 40},
-		{time.Date(2016, 11, 1, 0, 0, 0, 0, &time.Location{}), time.Date(2020, 05, 13, 0, 0, 0, 0, &time.Location{}), 42},
-		{time.Date(2019, 4, 17, 0, 0, 0, 0, &time.Location{}), time.Date(2020, 05, 13, 0, 0, 0, 0, &time.Location{}), 13},
-		{time.Date(2018, 9, 11, 0, 0, 0, 0, &time.Location{}), time.Date(2020, 05, 13, 0, 0, 0, 0, &time.Location{}), 20},
+		{
+			time.Date(2020, 2, 13, 0, 0, 0, 0, &time.Location{}),
+			time.Date(2020, 0o5, 13, 0, 0, 0, 0, &time.Location{}),
+			3,
+		},
+		{
+			time.Date(2015, 7, 30, 0, 0, 0, 0, &time.Location{}),
+			time.Date(2020, 0o5, 13, 0, 0, 0, 0, &time.Location{}),
+			58,
+		},
+		{
+			time.Date(2017, 1, 28, 0, 0, 0, 0, &time.Location{}),
+			time.Date(2020, 0o5, 13, 0, 0, 0, 0, &time.Location{}),
+			40,
+		},
+		{
+			time.Date(2016, 11, 1, 0, 0, 0, 0, &time.Location{}),
+			time.Date(2020, 0o5, 13, 0, 0, 0, 0, &time.Location{}),
+			42,
+		},
+		{
+			time.Date(2019, 4, 17, 0, 0, 0, 0, &time.Location{}),
+			time.Date(2020, 0o5, 13, 0, 0, 0, 0, &time.Location{}),
+			13,
+		},
+		{
+			time.Date(2018, 9, 11, 0, 0, 0, 0, &time.Location{}),
+			time.Date(2020, 0o5, 13, 0, 0, 0, 0, &time.Location{}),
+			20,
+		},
 	}
 
 	for _, tc := range testCases {
