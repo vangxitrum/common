@@ -46,6 +46,9 @@ func (ctx noCancelContext) Value(key any) any {
 }
 
 // WithRetimeout allows to create a new timeout for a potentially cancelled context.
-func WithRetimeout(ctx context.Context, duration time.Duration) (context.Context, context.CancelFunc) {
+func WithRetimeout(
+	ctx context.Context,
+	duration time.Duration,
+) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(WithoutCancellation(ctx), duration)
 }

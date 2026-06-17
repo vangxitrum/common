@@ -1,11 +1,12 @@
 package context2_test
 
 import (
-	"aioz-depin/internal/context2"
-	"aioz-depin/internal/testcontext"
 	"context"
 	"testing"
 	"time"
+
+	"aioz-depin/internal/context2"
+	"aioz-depin/internal/testcontext"
 
 	"github.com/stretchr/testify/require"
 )

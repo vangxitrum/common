@@ -17,7 +17,9 @@ type cancelContext struct {
 
 // WithCustomCancel creates a new context that can be cancelled with
 // a custom error.
-func WithCustomCancel(parent context.Context) (ctx context.Context, cancel func(error)) {
+func WithCustomCancel(
+	parent context.Context,
+) (ctx context.Context, cancel func(error)) {
 	cancelCtx, cancelParent := context.WithCancel(parent)
 
 	c := &cancelContext{
