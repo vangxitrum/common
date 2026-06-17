@@ -67,7 +67,11 @@ func (tm *Machine) Block(ctx context.Context, minimumTimerCount int) bool {
 // count and then advances the clock, triggering any expired timers/tickers. It
 // should not be called concurrently. Returns false if the context became done
 // while blocking.
-func (tm *Machine) BlockThenAdvance(ctx context.Context, minimumTimerCount int, d time.Duration) bool {
+func (tm *Machine) BlockThenAdvance(
+	ctx context.Context,
+	minimumTimerCount int,
+	d time.Duration,
+) bool {
 	return tm.backend.blockThenAdvance(ctx, minimumTimerCount, d)
 }
 
@@ -127,7 +131,11 @@ func (backend *machineBackend) NewTimer(d time.Duration) Timer {
 	return backend.newTimer(d, true)
 }
 
-func (backend *machineBackend) blockThenAdvance(ctx context.Context, minimumTimerCount int, d time.Duration) bool {
+func (backend *machineBackend) blockThenAdvance(
+	ctx context.Context,
+	minimumTimerCount int,
+	d time.Duration,
+) bool {
 	if d < 0 {
 		// We cannot go back, marty!
 		panic(errors.New("negative delta for advance"))
@@ -202,7 +210,10 @@ func (backend *machineBackend) blockThenAdvance(ctx context.Context, minimumTime
 	return true
 }
 
-func (backend *machineBackend) newTimer(interval time.Duration, oneShot bool) *fakeTimer {
+func (backend *machineBackend) newTimer(
+	interval time.Duration,
+	oneShot bool,
+) *fakeTimer {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 
@@ -225,7 +236,10 @@ func (backend *machineBackend) newTimer(interval time.Duration, oneShot bool) *f
 	return timer
 }
 
-func (backend *machineBackend) resetTimer(timer *fakeTimer, d time.Duration) (active bool) {
+func (backend *machineBackend) resetTimer(
+	timer *fakeTimer,
+	d time.Duration,
+) (active bool) {
 	if d <= 0 {
 		panic(errors.New("non-positive interval for Reset"))
 	}

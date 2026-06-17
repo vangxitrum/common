@@ -47,7 +47,10 @@ func WithClock(ctx context.Context, clk Clock) context.Context {
 
 // WithNewMachine provides a context that uses a clock controlled by
 // the returned time machine.
-func WithNewMachine(ctx context.Context, opts ...MachineOption) (context.Context, *Machine) {
+func WithNewMachine(
+	ctx context.Context,
+	opts ...MachineOption,
+) (context.Context, *Machine) {
 	clk := NewMachine(opts...)
 	return WithClock(ctx, clk.Clock()), clk
 }
