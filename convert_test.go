@@ -1,9 +1,10 @@
 package slices2_test
 
 import (
-	"aioz-depin/internal/slices2"
 	"strconv"
 	"testing"
+
+	"aioz-depin/internal/slices2"
 
 	"github.com/stretchr/testify/require"
 )

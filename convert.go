@@ -27,7 +27,10 @@ func Map[In, Out any](xs []In, fn func(In) Out) []Out {
 // ConvertErrs converts xs by applying fn to each element.
 // It returns all the successfully converted values and returns the list of
 // errors separately.
-func ConvertErrs[In, Out any](xs []In, fn func(In) (Out, error)) ([]Out, []error) {
+func ConvertErrs[In, Out any](
+	xs []In,
+	fn func(In) (Out, error),
+) ([]Out, []error) {
 	var errs []error
 	rs := make([]Out, 0, len(xs))
 	for i := range xs {
