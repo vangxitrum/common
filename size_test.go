@@ -1,9 +1,10 @@
 package memory_test
 
 import (
-	"aioz-depin/internal/memory"
 	"encoding/json"
 	"testing"
+
+	"aioz-depin/internal/memory"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ const (
 )
 
 func TestBase2Size(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		size memory.Size
 		text string
 	}{
@@ -47,7 +48,12 @@ func TestBase2Size(t *testing.T) {
 
 	for i, test := range tests {
 		if test.size.String() != test.text {
-			t.Errorf("%d. invalid text got %v expected %v", i, test.size.String(), test.text)
+			t.Errorf(
+				"%d. invalid text got %v expected %v",
+				i,
+				test.size.String(),
+				test.text,
+			)
 		}
 
 		var size memory.Size
@@ -71,7 +77,7 @@ func TestBase2Size(t *testing.T) {
 }
 
 func TestBase10Size(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		size memory.Size
 		text string
 	}{
@@ -94,7 +100,12 @@ func TestBase10Size(t *testing.T) {
 
 	for i, test := range tests {
 		if test.size.Base10String() != test.text {
-			t.Errorf("%d. invalid text got %v expected %v", i, test.size.String(), test.text)
+			t.Errorf(
+				"%d. invalid text got %v expected %v",
+				i,
+				test.size.String(),
+				test.text,
+			)
 		}
 
 		var size memory.Size
@@ -118,7 +129,7 @@ func TestBase10Size(t *testing.T) {
 }
 
 func TestParse(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		size memory.Size
 		text string
 	}{
@@ -165,7 +176,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestInvalidParse(t *testing.T) {
-	var tests = []string{
+	tests := []string{
 		"1.0Q",
 		"1.0QB",
 		"z1.0KB",
