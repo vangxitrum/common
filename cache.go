@@ -1,11 +1,12 @@
 package lrucache
 
 import (
-	"aioz-depin/pkg/common/time2"
 	"container/list"
 	"context"
 	"sync"
 	"time"
+
+	"aioz-depin/pkg/common/time2"
 
 	"github.com/spacemonkeygo/monkit/v3"
 )
@@ -76,7 +77,11 @@ func (e *ExpiringLRUOf[T]) Reset() {
 // it will call the provided function. Concurrent calls will dedupe as
 // best as they are able. If the function returns an error, it is not
 // cached and further calls will try again.
-func (e *ExpiringLRUOf[T]) Get(ctx context.Context, key string, fn func() (T, error)) (value T, err error) {
+func (e *ExpiringLRUOf[T]) Get(
+	ctx context.Context,
+	key string,
+	fn func() (T, error),
+) (value T, err error) {
 	if e.opts.Capacity <= 0 {
 		e.monitorCache(false)
 		return fn()
@@ -170,7 +175,11 @@ func (e *ExpiringLRUOf[T]) Delete(ctx context.Context, key string) {
 //
 // replaced is true if the key already existed in the cache and was valid, hence
 // the value is replaced.
-func (e *ExpiringLRUOf[T]) Add(ctx context.Context, key string, value T) (replaced bool) {
+func (e *ExpiringLRUOf[T]) Add(
+	ctx context.Context,
+	key string,
+	value T,
+) (replaced bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -202,7 +211,10 @@ func (e *ExpiringLRUOf[T]) Add(ctx context.Context, key string, value T) (replac
 
 // GetCached returns the value associated with key and true if it exists and
 // hasn't expired, otherwise nil and false.
-func (e *ExpiringLRUOf[T]) GetCached(ctx context.Context, key string) (value T, cached bool) {
+func (e *ExpiringLRUOf[T]) GetCached(
+	ctx context.Context,
+	key string,
+) (value T, cached bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -224,13 +236,17 @@ func (e *ExpiringLRUOf[T]) GetCached(ctx context.Context, key string) (value T, 
 //
 // NOTE the caller must always lock and unlock the mutex before calling this
 // method.
-func (e *ExpiringLRUOf[T]) peek(ctx context.Context, key string) (state *cacheState[T], evicted bool) {
+func (e *ExpiringLRUOf[T]) peek(
+	ctx context.Context,
+	key string,
+) (state *cacheState[T], evicted bool) {
 	state, ok := e.data[key]
 	if !ok {
 		return nil, false
 	}
 
-	if e.opts.Expiration > 0 && time2.Since(ctx, state.when) > e.opts.Expiration {
+	if e.opts.Expiration > 0 &&
+		time2.Since(ctx, state.when) > e.opts.Expiration {
 		e.order.Remove(state.order)
 		delete(e.data, key)
 

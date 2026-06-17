@@ -1,8 +1,6 @@
 package lrucache
 
 import (
-	"aioz-depin/internal/testcontext"
-	"aioz-depin/pkg/common/time2"
 	"context"
 	"math/rand"
 	"runtime"
@@ -10,6 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"aioz-depin/internal/testcontext"
+	"aioz-depin/pkg/common/time2"
 
 	"github.com/stretchr/testify/require"
 	"github.com/zeebo/errs"
@@ -42,7 +43,10 @@ func TestCache_Expires(t *testing.T) {
 	now := time.Now()
 	check(ctx, "a", 1)
 
-	timeCtx, _ := time2.WithNewMachine(ctx, time2.WithTimeAt(now.Add(2*time.Second)))
+	timeCtx, _ := time2.WithNewMachine(
+		ctx,
+		time2.WithTimeAt(now.Add(2*time.Second)),
+	)
 	check(timeCtx, "a", 2)
 }
 
@@ -155,7 +159,11 @@ func TestCache_Add_and_GetCached(t *testing.T) {
 
 	// Evicted because of capacity limit.
 	_, cached = cache.GetCached(ctx, "key1")
-	require.False(t, cached, "GetCached -> cached (evicted because it was the least recently used)")
+	require.False(
+		t,
+		cached,
+		"GetCached -> cached (evicted because it was the least recently used)",
+	)
 	value, cached = cache.GetCached(ctx, "key2")
 	require.True(t, cached, "GetCached -> cached")
 	require.Equal(t, 2, value)
@@ -208,7 +216,8 @@ func TestCache_Add_and_GetCached_Fuzz(t *testing.T) {
 			expVal := rng.Int63n(numEntries)
 			addCounter1 := atomic.LoadInt64(&addCounter1)
 			addCounter2 := atomic.LoadInt64(&addCounter2)
-			if expVal > addCounter2 || (expVal > addCounter1 && expVal < numEntries/2) {
+			if expVal > addCounter2 ||
+				(expVal > addCounter1 && expVal < numEntries/2) {
 				// The value isn't in the cache yet.
 				continue
 			}
@@ -248,7 +257,10 @@ type checker struct {
 	calls int
 }
 
-func newChecker(t *testing.T, cache *ExpiringLRUOf[string]) func(ctx context.Context, key string, calls int) {
+func newChecker(
+	t *testing.T,
+	cache *ExpiringLRUOf[string],
+) func(ctx context.Context, key string, calls int) {
 	return (&checker{t: t, cache: cache}).Check
 }
 
