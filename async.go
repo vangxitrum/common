@@ -8,8 +8,9 @@ import (
 )
 
 type asyncEntry struct {
-	ctx context.Context
-	r   slog.Record
+	ctx   context.Context
+	r     slog.Record
+	inner slog.Handler // the (possibly WithAttrs/WithGroup-derived) handler to dispatch to
 }
 
 // asyncHandler wraps any slog.Handler and dispatches records via a buffered
@@ -42,7 +43,7 @@ func newAsyncHandler(inner slog.Handler, bufSize int) *asyncHandler {
 func (h *asyncHandler) run() {
 	defer h.wg.Done()
 	for e := range h.ch {
-		_ = h.inner.Handle(e.ctx, e.r)
+		_ = e.inner.Handle(e.ctx, e.r)
 	}
 }
 
@@ -60,7 +61,7 @@ func (h *asyncHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 	clone := r.Clone()
 	select {
-	case h.ch <- asyncEntry{ctx: ctx, r: clone}:
+	case h.ch <- asyncEntry{ctx: ctx, r: clone, inner: h.inner}:
 	default:
 		atomic.AddUint64(h.dropped, 1)
 	}
