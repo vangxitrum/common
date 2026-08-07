@@ -5,6 +5,7 @@ package errs2
 
 import (
 	"context"
+	"errors"
 
 	"github.com/zeebo/errs"
 )
@@ -12,7 +13,7 @@ import (
 // IsCanceled returns true, when the error is a cancellation.
 func IsCanceled(err error) bool {
 	return errs.IsFunc(err, func(err error) bool {
-		return err == context.Canceled
+		return errors.Is(err, context.Canceled)
 	})
 }
 
