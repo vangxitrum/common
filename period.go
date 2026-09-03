@@ -19,6 +19,16 @@ type Period struct {
 	Month time.Month
 }
 
+// IsZero reports whether the Period is the zero value.
+//
+// Year zero rather than month zero, because a Period built from a bad month still
+// has a year and would be worth catching elsewhere; the zero value is the only thing
+// this answers for. Callers use it to mean "no period", which is a real state - there
+// is nothing outstanding to close.
+func (p Period) IsZero() bool {
+	return p.Year == 0 && p.Month == 0
+}
+
 // String outputs the YYYY-MM form of the payment period.
 func (p Period) String() string {
 	return fmt.Sprintf("%04d-%02d", p.Year, p.Month)
