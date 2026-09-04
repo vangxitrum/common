@@ -1,93 +1,267 @@
-# AIOZ Config
+# aioz-config
 
+Configuration for AIOZ Go services: a config struct declares its own defaults,
+help text and persistence rules through struct tags; the package binds it to
+command-line flags, loads values from a YAML file and the environment, and
+generates a default config file in which every setting is documented and every
+untouched default is commented out.
 
+Extracted from the DePIN hub's `internal/cfgstruct` + `pkg/process`, which in
+turn derive from Storj. See [Differences from depin](#differences-from-depin).
 
-## Getting started
+## Requirements
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.internal/tuan.quang.tran/aioz-config.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](https://gitlab.internal/tuan.quang.tran/aioz-config/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- Go 1.25
+- `cobra` for the command tree; `viper` and `pflag` come with it
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```sh
+go get gitlab.internal/tuan.quang.tran/aioz-config
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Quick start
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+```go
+package main
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+import (
+	"fmt"
+	"os"
+	"path/filepath"
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+	"github.com/spf13/cobra"
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+	config "gitlab.internal/tuan.quang.tran/aioz-config"
+)
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+type Config struct {
+	Server struct {
+		Address string `help:"address to listen on" default:"127.0.0.1:8080"`
+		Timeout time.Duration `help:"request timeout" default:"30s"`
+	}
+	DataDir  string `path:"true" help:"where to keep state" default:"$CONFDIR/data"`
+	Operator string `user:"true" help:"operator name"       default:""`
+}
 
-## License
-For open source projects, say how it is licensed.
+func main() {
+	var cfg Config
+	configDir := config.ApplicationDir("aioz", "myservice")
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+	root := &cobra.Command{Use: "myservice"}
+	config.SetupFlag(
+		nil, root, &configDir,
+		"config-dir", configDir, "the directory to load the config from",
+	)
+
+	setup := &cobra.Command{
+		Use:         "setup",
+		Annotations: map[string]string{"type": "setup"},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				return err
+			}
+			return config.SaveConfig(
+				cmd,
+				filepath.Join(configDir, config.DefaultCfgFilename),
+			)
+		},
+	}
+	run := &cobra.Command{
+		Use: "run",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := config.Load(cmd); err != nil {
+				return err
+			}
+			fmt.Println("listening on", cfg.Server.Address)
+			return nil
+		},
+	}
+	root.AddCommand(setup, run)
+
+	defaults := config.DefaultsFlag(root)
+	config.Bind(setup, &cfg, defaults, config.SetupMode(), config.ConfDir(configDir))
+	config.Bind(run, &cfg, defaults, config.ConfDir(configDir))
+
+	if err := root.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+```
+
+`myservice setup` writes:
+
+```yaml
+# where to keep state
+# data-dir: /home/you/.local/share/aioz/myservice/data
+
+# operator name
+operator: ""
+
+# address to listen on
+# server.address: 127.0.0.1:8080
+
+# request timeout
+# server.timeout: 30s
+```
+
+`myservice run` then reads that file, the environment
+(`AIOZ_SERVER_ADDRESS=...`) and the command line, in increasing order of
+precedence.
+
+## Where values come from
+
+Highest precedence first:
+
+1. an explicit command-line flag (`--server.address=...`)
+2. an environment variable, `AIOZ_` + the key upper-cased with `.` and `-`
+   turned into `_` (`AIOZ_SERVER_ADDRESS`). Override the prefix with
+   `AIOZ_ENV_PREFIX` at runtime or `WithEnvPrefix` in code
+3. `secrets.yaml` in the config directory, merged over
+4. `config.yaml` in the config directory
+5. the `default` struct tag
+
+## Struct tags
+
+| Tag | Effect |
+| --- | --- |
+| `help` | flag usage; also written as a comment above the setting in the generated file |
+| `default` | the value, parsed according to the field's type |
+| `devDefault` / `releaseDefault` / `testDefault` | build-specific values, see below |
+| `flagname` | overrides the derived name; must match `^\p{Ll}[\p{Ll}\p{N}-]*$` |
+| `noprefix:"true"` | do not prepend the parent struct's prefix |
+| `noflag:"true"` | skip the field entirely |
+| `internal:"true"` | no flag at all; setting a default alongside it panics |
+| `setup:"true"` | bound only under `SetupMode()`, and never persisted |
+| `hidden:"true"` | hidden from help, and never persisted |
+| `deprecated:"true"` | hidden from help; persisted unless `SaveConfigRemovingDeprecated` |
+| `user:"true"` | always written live in the generated file, even at its default |
+| `source:"flag"` | command line only; never persisted |
+| `path:"true"` | run the default through `filepath.FromSlash` |
+| `basic-help:"true"` | include in short help |
+
+Flag names come from the Go field name, snake-cased then hyphenated, and
+prefixed by each enclosing named struct: `Server.MaxAttempts` becomes
+`server.max-attempts`. An embedded struct is flattened instead, and **must be
+an exported type** - reflection cannot address the fields of an unexported
+embedded struct.
+
+Supported field types: `int`, `int64`, `uint`, `uint64`, `float64`, `string`,
+`bool`, `time.Duration`, `[]string`, arrays of structs, nested structs, and any
+type implementing `pflag.Value`. Anything else panics at bind time, naming the
+type, the flag and the Go field.
+
+### Which default applies
+
+`BindFlags` picks one of the four default tags:
+
+| Build | Order tried |
+| --- | --- |
+| dev | `devDefault`, `default` |
+| release | `releaseDefault`, `default` |
+| test | `testDefault`, `devDefault`, `default` |
+
+Defining only a default for a build you are *not* doing panics, rather than
+silently binding the zero value. The build kind comes from `DefaultsFlag`,
+which reads `--defaults` off the command line, falling back to `SetRelease`.
+Release binaries should call `config.SetRelease(true)` from `main`.
+
+### Directory variables
+
+A default may reference `$CONFDIR`, `$IDENTITYDIR`, `$DATADIR` or any variable
+set with `ConfigVar`, supplied as bind options:
+
+```go
+config.Bind(cmd, &cfg,
+	config.ConfDir("/etc/myservice"),
+	config.IdentityDir("/etc/myservice/identity"),
+	config.ConfigVar("CACHE", "/var/cache/myservice"),
+)
+```
+
+## The generated file
+
+`SaveConfig` writes every persistable setting, sorted, with its help text as a
+comment. A setting still at its default is written **commented out**, so that a
+later change to that default still reaches nodes that never set it; a setting
+that was explicitly chosen, loaded from an existing file, overridden, or tagged
+`user:"true"`, is written live. `setup`, `hidden` and `source:"flag"` settings
+are never written at all.
+
+A setup command that may run against an existing config should `Load` before
+`SaveConfig`, so that regenerating preserves what the operator already set.
+
+## API
+
+| Function | Purpose |
+| --- | --- |
+| `Bind(cmd, &cfg, opts...)` | bind a struct to a cobra command and record it for `Load` |
+| `BindFlags(flags, &cfg, opts...)` | bind to a bare `pflag.FlagSet`, for tests and harnesses |
+| `Load(cmd, opts...) (*LoadResult, error)` | read files and environment into every struct bound to `cmd` |
+| `SaveConfig(cmd, path, opts...)` | write the config file |
+| `Viper(cmd, opts...)` | the underlying viper, built on first use |
+| `ReadConfigFiles(cmd, vip)` | the default file-reading step, for use inside a custom loader |
+| `New() *Registry` | an isolated registry, for tests or long-lived processes |
+| `Forget(cmd)` | drop a command's config structs and memoized viper |
+| `ApplicationDir`, `IsValidSetupDir`, `IsWritable`, `AtomicWriteFile` | filesystem helpers for setup commands |
+
+`Load` must run after cobra has parsed flags - from `RunE`, `PreRunE` or
+`PersistentPreRunE` - because it reads `--config-dir` to find the file. Calling
+it earlier returns `ErrFlagsNotParsed` rather than silently reading nothing.
+
+`LoadResult` reports what happened to every key:
+
+```go
+res, err := config.Load(cmd, config.WithFailOnValueError())
+res.UsedKeys    // decoded into a struct or set on a flag
+res.MissingKeys // in the file but matching nothing; usually a typo
+res.BrokenKeys  // matched something, but the value would not parse
+```
+
+Options: `WithConfigLoader`, `WithLogger`, `WithEnvPrefix`, `WithFilenames`,
+`WithFailOnValueError`.
+
+### Registries
+
+The package-level functions share one default registry, which is all a normal
+binary needs. Because it is keyed by `*cobra.Command` and never expires, a
+long-lived process that builds commands dynamically should either use its own
+`New()` registry or call `Forget` when a command is done. Tests that run in
+parallel should use their own registry.
+
+## Differences from depin
+
+The port is faithful in behavior, but not identical:
+
+- `cfgstruct.Bind` is now `BindFlags`; `process.Bind` keeps the name `Bind`.
+- `process.LoadConfig` is now `ReadConfigFiles`, since the new `Load` does
+  something different.
+- The `Prefix` bind option is now `FlagPrefix`.
+- The decode step that lived inside `process.InitBeforeExecute` is now the
+  exported `Load`, and reports its key sets instead of only logging them.
+- Package-level `configs`/`vipers` maps became `Registry`, which fixes a
+  deadlock when a custom loader called back into the package, and a leak that
+  pinned every command forever.
+- Process lifecycle (`Exec`, `Ctx`, logging, tracing, debug server, monkit)
+  stays behind; this package is configuration only. A service adopting it keeps
+  its own thin lifecycle layer that calls into `Bind`/`Load`/`SaveConfig`.
+- `go.uber.org/zap` is gone; `SetupFlag` takes a `*slog.Logger` (nil is fine).
+
+Two bugs are fixed rather than reproduced, so behavior differs from depin:
+
+1. A value that failed to parse used to be marked as set anyway, so the next
+   generated config persisted the bad value live, producing a file the binary
+   itself would then reject.
+2. A list-valued setting claimed by no struct used to be read as a string,
+   which viper cannot cast, so the list was silently emptied.
+
+`DefaultsType` also used to contain `if false { return "release" }`, so every
+binary ran on dev defaults; it now follows `SetRelease`.
+
+## Development
+
+```sh
+make lint      # golangci-lint, the same version CI pins
+make lint-fix
+make test
+```
