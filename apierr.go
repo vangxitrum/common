@@ -6,7 +6,7 @@
 // The transport renders the first two into the JSON envelope; nothing else has
 // to know how a given failure maps to a status code.
 //
-// The convention for a reason, borrowed from depin's grpcerr, is lowercase
+// The convention for a reason is lowercase
 // kebab-case naming the cause rather than the code: "name-too-long", not
 // "bad-request". The status can change without breaking a client that
 // branches on the reason.
@@ -75,7 +75,7 @@ func (e *Error) Reason() string { return e.reason }
 func (e *Error) Fields() []any { return e.fields }
 
 // With attaches key/value pairs naming the subject of the failure - which
-// record, which id. This is the axis depin's error model lacks: with only a
+// record, which id. This is the axis an error model usually lacks: with only a
 // package tag and a status tag, "contract not found" inside the file service
 // renders as "file: not found", because nothing carries the subject.
 //
@@ -161,7 +161,7 @@ func Fields(err error) []any {
 func Is(err error, status int) bool { return Status(err) == status }
 
 // The constructors below cover the statuses a service actually returns.
-// Forbidden is here deliberately: depin's own error mapping omitted it once,
+// Forbidden is here deliberately: an error mapping that omits it answers 500,
 // so authorization failures answered as Internal - a 500 for what was really
 // a 403, which reads as an outage rather than a permission problem.
 

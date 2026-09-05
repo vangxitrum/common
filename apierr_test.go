@@ -33,7 +33,7 @@ func TestConstructorsCarryStatusAndReason(t *testing.T) {
 	}
 }
 
-// TestForbiddenIsNot500 pins the specific mistake depin's error mapping made:
+// TestForbiddenIsNot500 pins a mistake a real error mapping once made:
 // with no Forbidden case, an authorization failure answered as Internal, so a
 // permission problem looked like an outage.
 func TestForbiddenIsNot500(t *testing.T) {
@@ -117,7 +117,7 @@ func TestValidReason(t *testing.T) {
 		}
 	})
 
-	// This is depin's failure mode. Every missing record answered "not-found",
+	// The failure mode this rule exists for. Every missing record answered
 	// so a client could not tell a missing contract from a missing file.
 	t.Run("a reason restating the status is rejected", func(t *testing.T) {
 		for _, reason := range []string{
@@ -140,7 +140,7 @@ func TestValidReason(t *testing.T) {
 	})
 }
 
-// TestFieldsNameTheSubject covers the axis depin's model lacks entirely: with
+// TestFieldsNameTheSubject covers the axis such a model lacks entirely: with
 // only a package tag and a status tag, nothing carries which record failed.
 func TestFieldsNameTheSubject(t *testing.T) {
 	t.Parallel()

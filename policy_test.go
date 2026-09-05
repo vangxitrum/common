@@ -29,7 +29,7 @@ var constructors = map[string]bool{
 // apierr reason slug to the same rule, so the convention is enforced rather
 // than remembered.
 //
-// This is the guardrail against depin's failure mode: there, every missing
+// This is the guardrail against a real failure mode: in one service, every missing
 // record answered with the single slug "not-found", so a contract that did not
 // exist was indistinguishable from a file that did not exist - and because the
 // package tag supplied the subject, a contract lookup inside the file service

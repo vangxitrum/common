@@ -12,8 +12,8 @@ var reasonPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 // statusWords are the words that describe an HTTP status rather than a cause.
 // A reason built only from these carries no information the status code does
 // not already carry, which is the failure this package exists to prevent: in
-// depin, every missing thing - contract, file, segment - answered with the
-// single slug "not-found", so a client could not tell them apart.
+// one real service every missing thing - contract, file, segment - answered
+// with the single slug "not-found", so a client could not tell them apart.
 //
 // The rule is that a reason names the subject: "contract-not-found", not
 // "not-found". One status maps to many reasons; never the reverse.
