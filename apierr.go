@@ -18,6 +18,7 @@ package apierr
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 )
 
@@ -44,6 +45,26 @@ func (e *Error) Error() string {
 
 // Unwrap exposes the wrapped error to errors.Is and errors.As.
 func (e *Error) Unwrap() error { return e.err }
+
+// LogValue renders the error as its message when logged.
+//
+// slog's own JSON handler special-cases the error interface, but a handler
+// that simply json.Marshals the attribute value does not - and an error's
+// fields are unexported, so it marshals to "{}". aioz-logger is one such
+// handler, and JSON is the release default, so without this every logged
+// error is an empty object in production. Resolve() is called on every
+// attribute, so implementing LogValuer fixes it for any handler.
+func (e *Error) LogValue() slog.Value { return slog.StringValue(e.Error()) }
+
+// ClientMessage is what may be shown to a user: the message this error was
+// constructed with, and never the wrapped cause.
+//
+// Error() is the operator's view and appends the cause, which is routinely a
+// driver error or a parser's complaint about a raw input - text written for a
+// developer, not for whoever is looking at the screen. The transport renders
+// this instead, falling back to the status text when a Wrap carried no message
+// of its own.
+func (e *Error) ClientMessage() string { return e.msg }
 
 // Reason returns the machine-readable slug.
 func (e *Error) Reason() string { return e.reason }
