@@ -45,7 +45,11 @@ func TestEveryReasonInTheCodebaseIsUsable(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			if name := d.Name(); name == ".git" || name == "bin" || name == ".cache" {
+			// Build products and vendored code are not ours to hold to this
+			// rule, and generated Go does not always parse with a plain
+			// go/parser - the SDK openapi-generator emits does not.
+			switch d.Name() {
+			case ".git", "bin", ".cache", "sdk", "vendor", "testdata":
 				return filepath.SkipDir
 			}
 			return nil
