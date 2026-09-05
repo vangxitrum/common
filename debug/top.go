@@ -60,6 +60,11 @@ func (rc *requestCounter) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	})
 
 	for _, e := range entries {
-		fmt.Fprintf(w, "http_requests_count uri=%s %d\n", e.path, e.count)
+		_, _ = fmt.Fprintf(
+			w,
+			"http_requests_count uri=%s %d\n",
+			e.path,
+			e.count,
+		)
 	}
 }

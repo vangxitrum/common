@@ -30,7 +30,7 @@ type Config struct {
 	Addr string `help:"address to listen on for debug endpoints" default:"127.0.0.1:0"`
 
 	ControlTitle string `hidden:"true"`
-	Control      bool   `releaseDefault:"false" devDefault:"true" hidden:"true"`
+	Control      bool   `hidden:"true" releaseDefault:"false" devDefault:"true"`
 
 	PrometheusSanitize bool `default:"true" help:"if true, sanitize prometheus metric names and labels" hidden:"true"`
 
@@ -65,31 +65,64 @@ type Extension interface {
 }
 
 // NewServer returns a new debug.Server.
-func NewServer(log *slog.Logger, listener net.Listener, registry *monkit.Registry, config Config, extensions ...Extension) *Server {
-	return NewServerWithLevel(log, listener, registry, config, nil, extensions...)
+func NewServer(
+	log *slog.Logger,
+	listener net.Listener,
+	registry *monkit.Registry,
+	config Config,
+	extensions ...Extension,
+) *Server {
+	return NewServerWithLevel(
+		log,
+		listener,
+		registry,
+		config,
+		nil,
+		extensions...,
+	)
 }
 
 // NewServerWithLevel returns a new debug.Server with a dynamic log-level endpoint at /logging.
 // Pass a *slog.LevelVar that controls your root slog handler's level.
-func NewServerWithLevel(log *slog.Logger, listener net.Listener, registry *monkit.Registry, config Config, logLevel *slog.LevelVar, extensions ...Extension) *Server {
+func NewServerWithLevel(
+	log *slog.Logger,
+	listener net.Listener,
+	registry *monkit.Registry,
+	config Config,
+	logLevel *slog.LevelVar,
+	extensions ...Extension,
+) *Server {
 	server := &Server{
 		log:      log,
 		listener: listener,
-		PrometheusEndpoint: NewPrometheusEndpointFromConfig(registry, PrometheusEndpointConfig{
-			SanitizeValues: config.PrometheusSanitize,
-		}),
+		PrometheusEndpoint: NewPrometheusEndpointFromConfig(
+			registry,
+			PrometheusEndpointConfig{
+				SanitizeValues: config.PrometheusSanitize,
+			},
+		),
 		requestCounter: newRequestCounter(),
 		config:         config,
 	}
 
 	server.server.Handler = server.requestCounter.middleware(&server.mux)
 
-	server.Panel = NewPanel(log.With("component", "control"), "/control", config.ControlTitle)
+	server.Panel = NewPanel(
+		log.With("component", "control"),
+		"/control",
+		config.ControlTitle,
+	)
 	if config.Control {
 		server.mux.Handle("/control/", server.Panel)
 	}
 
-	server.mux.Handle("/version/", http.StripPrefix("/version", newVersionHandler(log.With("component", "version"))))
+	server.mux.Handle(
+		"/version/",
+		http.StripPrefix(
+			"/version",
+			newVersionHandler(log.With("component", "version")),
+		),
+	)
 
 	server.mux.HandleFunc("/debug/pprof/", pprof.Index)
 	server.mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -103,13 +136,21 @@ func NewServerWithLevel(log *slog.Logger, listener net.Listener, registry *monki
 
 	server.mux.Handle("/mon/", http.StripPrefix("/mon", http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			present.HTTP(server.PrometheusEndpoint.registryForRequest(r)).ServeHTTP(w, r)
-		})))
-	server.mux.HandleFunc("/metrics", server.PrometheusEndpoint.PrometheusMetrics)
+			present.HTTP(server.PrometheusEndpoint.registryForRequest(r)).
+				ServeHTTP(w, r)
+		},
+	)))
+	server.mux.HandleFunc(
+		"/metrics",
+		server.PrometheusEndpoint.PrometheusMetrics,
+	)
 
-	server.mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintln(w, "OK")
-	})
+	server.mux.HandleFunc(
+		"/health",
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = fmt.Fprintln(w, "OK")
+		},
+	)
 
 	if logLevel != nil {
 		server.mux.HandleFunc("/logging", levelHandler(logLevel))
@@ -117,7 +158,10 @@ func NewServerWithLevel(log *slog.Logger, listener net.Listener, registry *monki
 	for _, ext := range extensions {
 		server.mux.HandleFunc(ext.Path(), ext.Handler)
 	}
-	server.mux.HandleFunc("/", indexPage(config.Control, logLevel != nil, extensions))
+	server.mux.HandleFunc(
+		"/",
+		indexPage(config.Control, logLevel != nil, extensions),
+	)
 
 	return server
 }
@@ -126,7 +170,10 @@ func htmlLink(link string) string {
 	return fmt.Sprintf("<a href=\"%s\">%s</a>", link, link)
 }
 
-func indexPage(writeControl, writeLogging bool, extensions []Extension) func(w http.ResponseWriter, r *http.Request) {
+func indexPage(
+	writeControl, writeLogging bool,
+	extensions []Extension,
+) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		line := func(args ...string) {
 			_, _ = w.Write([]byte(strings.Join(args, "") + "\n"))
@@ -141,11 +188,15 @@ func indexPage(writeControl, writeLogging bool, extensions []Extension) func(w h
 			line("<dt>", htmlLink("/control/"), "</dt>")
 		}
 		line("<dt>", htmlLink("/version/"), "</dt>")
-		line("<dd>JSON representation of the current version information for the binary</dd>")
+		line(
+			"<dd>JSON representation of the current version information for the binary</dd>",
+		)
 		line("<dt>", htmlLink("/debug/pprof/"), "</dt>")
 		line("<dd>HTML page listing the available Go pprof profiles</dd>")
 		line("<dt>", htmlLink("/debug/pprof/symbol"), "</dt>")
-		line("<dd>Looks up the program counters listed in the request, responding with a table mapping program counters to function names</dd>")
+		line(
+			"<dd>Looks up the program counters listed in the request, responding with a table mapping program counters to function names</dd>",
+		)
 		line("<dt>", htmlLink("/debug/run/trace/db"), "</dt>")
 		line("<dd>Collects traces until request is canceled</dd>")
 		line("<dt>", htmlLink("/mon/"), "</dt>")
@@ -156,7 +207,9 @@ func indexPage(writeControl, writeLogging bool, extensions []Extension) func(w h
 		line("<dd>debugServer server health check</dd>")
 		if writeLogging {
 			line("<dt>", htmlLink("/logging"), "</dt>")
-			line("<dd>JSON endpoint can report or change the current logging level (https://pkg.go.dev/go.uber.org/zap#AtomicLevel.ServeHTTP)</dd>")
+			line(
+				"<dd>JSON endpoint can report or change the current logging level (https://pkg.go.dev/go.uber.org/zap#AtomicLevel.ServeHTTP)</dd>",
+			)
 		}
 		for _, ext := range extensions {
 			line("<dt>", htmlLink(ext.Path()), "</dt>")
@@ -205,7 +258,7 @@ func (server *Server) Close() error {
 func (server *Server) collectTraces(w http.ResponseWriter, r *http.Request) {
 	// TODO: Implement trace collection
 	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte("Trace collection not implemented"))
+	_, _ = w.Write([]byte("Trace collection not implemented"))
 }
 
 // sanitize formats val to be suitable for prometheus.
@@ -242,7 +295,10 @@ func newVersionHandler(log *slog.Logger) *versionHandler {
 	return &versionHandler{log}
 }
 
-func (handler *versionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (handler *versionHandler) ServeHTTP(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
 	j, err := version.Build.Marshal()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -266,7 +322,7 @@ func levelHandler(lv *slog.LevelVar) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			fmt.Fprintln(w, lv.Level())
+			_, _ = fmt.Fprintln(w, lv.Level())
 		case http.MethodPut, http.MethodPost:
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -275,11 +331,15 @@ func levelHandler(lv *slog.LevelVar) http.HandlerFunc {
 			}
 			var level slog.Level
 			if err := level.UnmarshalText(bytes.TrimSpace(body)); err != nil {
-				http.Error(w, "unknown level "+string(bytes.TrimSpace(body)), http.StatusBadRequest)
+				http.Error(
+					w,
+					"unknown level "+string(bytes.TrimSpace(body)),
+					http.StatusBadRequest,
+				)
 				return
 			}
 			lv.Set(level)
-			fmt.Fprintln(w, lv.Level())
+			_, _ = fmt.Fprintln(w, lv.Level())
 		default:
 			http.Error(w, "use GET or PUT", http.StatusMethodNotAllowed)
 		}

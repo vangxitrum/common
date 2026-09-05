@@ -12,7 +12,7 @@ type Context struct {
 	t *testing.T
 }
 
-// New returns a Context that is cancelled when the test finishes.
+// New returns a Context that is canceled when the test finishes.
 func New(t *testing.T) *Context {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
