@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
 
-	config "gitlab.internal/tuan.quang.tran/aioz-config"
+	config "gitlab.internal/tuan.quang.tran/aioz-common/config"
 )
 
 func newFlagSet() *pflag.FlagSet {

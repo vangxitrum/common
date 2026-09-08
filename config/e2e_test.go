@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	config "gitlab.internal/tuan.quang.tran/aioz-config"
+	config "gitlab.internal/tuan.quang.tran/aioz-common/config"
 )
 
 // ServerConfig is a nested config struct, so the e2e test covers dotted flag

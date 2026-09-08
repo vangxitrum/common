@@ -1,6 +1,6 @@
 version: "2"
 
-# golangci-lint config for aioz-config, applied from team-playbook's
+# golangci-lint config for aioz-common, applied from team-playbook's
 # init-source template: /home/tuan/work/team-playbook/templates/golangci-lint/
 # See that folder's README.md for the requirement -> config traceability
 # table and rationale.

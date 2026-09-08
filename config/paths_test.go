@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	config "gitlab.internal/tuan.quang.tran/aioz-config"
+	config "gitlab.internal/tuan.quang.tran/aioz-common/config"
 )
 
 func TestAtomicWriteFileCreatesAndOverwrites(t *testing.T) {

@@ -14,7 +14,7 @@ import (
 	"github.com/spacemonkeygo/monkit/v3"
 	"github.com/stretchr/testify/require"
 
-	"gitlab.internal/tuan.quang.tran/aioz-stats/testcontext"
+	"gitlab.internal/tuan.quang.tran/aioz-common/stats/testcontext"
 )
 
 // testLogger returns a slog.Logger that writes to t.Log.

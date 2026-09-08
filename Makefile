@@ -1,4 +1,4 @@
-# aioz-config Makefile.
+# aioz-common Makefile.
 # Lint targets applied from team-playbook's init-source template:
 # /home/tuan/work/team-playbook/templates/golangci-lint/Makefile.snippet
 # Uses the same golangci-lint version pin as .gitlab-ci.yml so `make lint`

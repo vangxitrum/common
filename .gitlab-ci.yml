@@ -1,4 +1,4 @@
-# aioz-stats CI: lint-only pipeline (library repo, no build/deploy stage).
+# aioz-common CI: lint + test pipeline (library repo, no build/deploy stage).
 # Applied from team-playbook's init-source template:
 # /home/tuan/work/team-playbook/templates/golangci-lint/lint.gitlab-ci.yml
 # Blocking on purpose: matches team-playbook DoD "linter passes with zero
@@ -6,6 +6,7 @@
 
 stages:
   - lint
+  - test
 
 variables:
   GOLANGCI_LINT_VERSION: "v2.11.4"
@@ -49,3 +50,21 @@ lint:
     paths:
       - golangci-lint-report.xml
     expire_in: 1 week
+
+test:
+  stage: test
+  image: ${GO_IMAGE}
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    GOMODCACHE: "${CI_PROJECT_DIR}/.cache/go-mod"
+    GOCACHE: "${CI_PROJECT_DIR}/.cache/go-build"
+    CGO_ENABLED: "0"
+  cache:
+    policy: pull-push
+    key: "go-test-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cache/
+  script:
+    - go test ./...

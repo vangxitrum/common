@@ -17,7 +17,7 @@ turn derive from Storj. See [Differences from depin](#differences-from-depin).
 ## Installation
 
 ```sh
-go get gitlab.internal/tuan.quang.tran/aioz-config
+go get gitlab.internal/tuan.quang.tran/aioz-common
 ```
 
 ## Quick start
@@ -32,7 +32,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	config "gitlab.internal/tuan.quang.tran/aioz-config"
+	config "gitlab.internal/tuan.quang.tran/aioz-common/config"
 )
 
 type Config struct {

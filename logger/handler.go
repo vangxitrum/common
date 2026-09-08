@@ -133,7 +133,7 @@ func (h *consoleHandler) writeConsole(level slog.Level, t time.Time, msg, src st
 			m["source"] = src
 		}
 		b, _ := json.Marshal(m)
-		fmt.Fprintln(h.out, string(b))
+		_, _ = fmt.Fprintln(h.out, string(b))
 		return
 	}
 
@@ -163,7 +163,7 @@ func (h *consoleHandler) writeConsole(level slog.Level, t time.Time, msg, src st
 	if stack != "" {
 		sb.WriteString(colorize(lightRed, "\nstacktrace:"+stack))
 	}
-	fmt.Fprintln(h.out, sb.String())
+	_, _ = fmt.Fprintln(h.out, sb.String())
 }
 
 func levelStr(level slog.Level) string {
@@ -223,12 +223,12 @@ func attrsToAny(attrs []slog.Attr) []any {
 const (
 	reset = "\033[0m"
 
-	cyan         = 36
-	lightGray    = 37
-	darkGray     = 90
-	lightRed     = 91
-	lightYellow  = 93
-	white        = 97
+	cyan        = 36
+	lightGray   = 37
+	darkGray    = 90
+	lightRed    = 91
+	lightYellow = 93
+	white       = 97
 )
 
 func colorize(code int, s string) string {

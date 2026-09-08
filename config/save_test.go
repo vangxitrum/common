@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	config "gitlab.internal/tuan.quang.tran/aioz-config"
+	config "gitlab.internal/tuan.quang.tran/aioz-common/config"
 )
 
 // newConfigCmd builds a cobra command whose flags are the subject of the tests.

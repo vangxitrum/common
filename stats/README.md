@@ -15,7 +15,7 @@ A shared debug and observability package for AIOZ backend services. It bundles a
 ## Installation
 
 ```bash
-go get gitlab.internal/tuan.quang.tran/aioz-stats
+go get gitlab.internal/tuan.quang.tran/aioz-common
 ```
 
 ---
@@ -60,7 +60,7 @@ import (
 
     "github.com/spacemonkeygo/monkit/v3"
 
-    "gitlab.internal/tuan.quang.tran/aioz-stats/debug"
+    "gitlab.internal/tuan.quang.tran/aioz-common/stats/debug"
 )
 
 func main() {
@@ -141,9 +141,9 @@ Pass version details at link time:
 
 ```makefile
 go build -ldflags "\
-  -X gitlab.internal/tuan.quang.tran/aioz-stats/version.Build.Release=v1.2.3 \
-  -X gitlab.internal/tuan.quang.tran/aioz-stats/version.Build.SHA=$(git rev-parse HEAD) \
-  -X gitlab.internal/tuan.quang.tran/aioz-stats/version.Build.Build=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  -X gitlab.internal/tuan.quang.tran/aioz-common/stats/version.Build.Release=v1.2.3 \
+  -X gitlab.internal/tuan.quang.tran/aioz-common/stats/version.Build.SHA=$(git rev-parse HEAD) \
+  -X gitlab.internal/tuan.quang.tran/aioz-common/stats/version.Build.Build=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
 ---

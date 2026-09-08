@@ -12,7 +12,7 @@ import (
 	"net/http/pprof"
 	"strings"
 
-	"gitlab.internal/tuan.quang.tran/aioz-stats/version"
+	"gitlab.internal/tuan.quang.tran/aioz-common/stats/version"
 
 	"github.com/spacemonkeygo/monkit/v3"
 	"github.com/spacemonkeygo/monkit/v3/present"

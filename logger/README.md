@@ -19,7 +19,7 @@ A `slog.Handler` for Go that adds async dispatch, buffered file output, Graylog 
 ## Installation
 
 ```sh
-go get gitlab.internal/tuan.quang.tran/aioz-logger
+go get gitlab.internal/tuan.quang.tran/aioz-common
 ```
 
 ## Quick start
@@ -32,7 +32,7 @@ import (
     "log/slog"
     "time"
 
-    logger "gitlab.internal/tuan.quang.tran/aioz-logger"
+    logger "gitlab.internal/tuan.quang.tran/aioz-common/logger"
 )
 
 func main() {
@@ -411,7 +411,7 @@ import (
     "syscall"
     "time"
 
-    logger "gitlab.internal/tuan.quang.tran/aioz-logger"
+    logger "gitlab.internal/tuan.quang.tran/aioz-common/logger"
 )
 
 func main() {
