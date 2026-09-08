@@ -1,12 +1,13 @@
 # version
 
-The build stamp linked into a binary, and the value the [debug
+The build stamp of the running binary, and the value the [debug
 server](../README.md) serves on `/version/`.
 
-A binary carries two independent things: the **version stamp** (`release`,
-`sha`, `build`) and the **defaults channel** (`dev` or `release`), which picks
-between the `devDefault` and `releaseDefault` struct tags read by
-[`config`](../../config/README.md).
+**A service does not have to wire anything into its Makefile.** Since Go 1.18
+`go build` embeds the commit, the commit timestamp and whether the working tree
+was dirty into every binary, and `debug.ReadBuildInfo` reads them back. The
+`-ldflags -X` variables remain, but only as a fallback for builds where that
+information is absent.
 
 ```go
 import "gitlab.internal/tuan.quang.tran/aioz-common/stats/version"
@@ -14,62 +15,84 @@ import "gitlab.internal/tuan.quang.tran/aioz-common/stats/version"
 
 ## Usage
 
-Call `Register` once from `main`, before any command runs:
+`Build` is populated in `init`, so there is nothing to call:
 
 ```go
-func main() {
-    version.Register()          // publishes the linked stamp to version.Build
-    config.SetRelease(version.IsRelease())
-    ...
-}
+fmt.Print(version.Build)                 // for a version subcommand
+config.SetRelease(version.IsRelease())   // pick releaseDefault config tags
 ```
 
-`Register` is what makes a service's `version` subcommand and the debug
-server's `/version/` agree.
+## Where each field comes from
 
-## Stamping a build
+| field | source |
+| --- | --- |
+| `CommitHash` | `vcs.revision` from the build info |
+| `Timestamp` | `vcs.time` |
+| `Modified` | `vcs.modified` - the working tree was dirty |
+| `Version` | the module version, but only for a binary installed with `go install module@v1.2.3`. Go synthesises a pseudo-version for a local build, which records that no version was set, so it is discarded. |
+| `Release` | derived, see below |
 
-A service's Makefile passes `-ldflags`:
+## Release is derived, not declared
+
+A build counts as a release only if it is provably a clean, tagged one: a real
+version, a recorded commit and timestamp, and an unmodified tree. A binary built
+from a dirty checkout says so rather than claiming to be a release.
+
+This is the point of reading the toolchain's own record instead of trusting a
+flag - a binary cannot assert a provenance it does not have.
+
+## The fallback
+
+The Go toolchain omits the VCS block when the build is not made from a
+repository: `-buildvcs=false`, a container build whose context has no `.git`,
+and **always inside `go test`**. The link-time variables cover those cases:
 
 ```make
 VERSION_PKG := gitlab.internal/tuan.quang.tran/aioz-common/stats/version
 
 LDFLAGS := -s -w \
-	-X $(VERSION_PKG).release=$(RELEASE) \
-	-X $(VERSION_PKG).sha=$(SHA) \
-	-X $(VERSION_PKG).build=$(BUILD_TIME) \
+	-X $(VERSION_PKG).buildVersion=$(VERSION) \
+	-X $(VERSION_PKG).buildCommitHash=$(SHA) \
+	-X $(VERSION_PKG).buildTimestamp=$(shell date -u +%s) \
 	-X $(VERSION_PKG).channel=$(CHANNEL)
 ```
 
-**Those four must stay plain `string` variables.** The linker's `-X` can only
-patch a symbol whose type is exactly `string`; aimed at a struct field such as
-`version.Build.Release` it resolves to a symbol that does not exist and is
-**silently dropped**, leaving a binary that reports `dev` with no error
-anywhere. That is why the patched symbols are the unexported vars and `Register`
-copies them into `Build` at runtime.
+Each of `buildVersion`, `buildCommitHash` and `buildTimestamp` is consulted only
+when the build info did not already supply that field. `buildRelease` is the one
+exception: set it and it overrides the derivation outright.
 
-## Why the channel is a separate variable
+**Those variables must stay plain `string`s.** The linker's `-X` can only patch
+a symbol whose type is exactly `string`; aimed at a struct field such as
+`Build.Version` it resolves to a symbol that does not exist and is **silently
+dropped**.
 
-Deriving the channel from the version stamp - "anything not `dev` is a release"
-- looks reasonable and is wrong: a Makefile stamps `git describe --tags --always
---dirty` on every build, so every build looks like a release and no `devDefault`
-value is ever reachable. That is not hypothetical; the template shipped that
-bug, and the symptom was a developer running `make build` and getting JSON logs
-at info level with no idea the readable colorized logger existed.
+## The defaults channel
+
+`channel` is separate from `Release` and is the one thing still worth setting
+explicitly. It selects which [`config`](../../config/README.md) struct tags
+apply - `devDefault` or `releaseDefault` - and that is a deliberate choice about
+how the binary should behave, not an observation about how it was built. `make
+build` leaves it at `dev`; a Dockerfile or a release job passes
+`CHANNEL=release`.
+
+Deriving it from the version stamp - "anything not `dev` is a release" - looks
+reasonable and is wrong: a Makefile that stamps `git describe --tags --always
+--dirty` makes every build look like a release, and no `devDefault` value is
+ever reachable. The template shipped that bug; the symptom was a developer
+running `make build` and getting JSON logs at info level with no idea the
+readable colorized logger existed.
 
 Because settings like `log.format` and `log.level` are `user:"true"`, the
 channel that generated a config file is baked into it as live values. Generate
-production config with a production binary - the container image - or set them
-explicitly.
+production config with a production binary, or set them explicitly.
 
 ## API
 
 | | |
 | --- | --- |
-| `Register()` | copy the linked stamp into `Build`; call once from `main` |
-| `Build` | the `Info` the debug server serves on `/version/` |
-| `Current() Info` | the linked stamp |
+| `Build` | the `Info` for this binary, filled in at startup |
+| `Info` | `Version`, `CommitHash`, `Timestamp`, `Release`, `Modified` |
+| `(Info) String() string` | the stamp rendered for a `version` subcommand |
+| `(Info) Marshal() ([]byte, error)` | JSON encoding, as served on `/version/` |
 | `IsRelease() bool` | whether to use `releaseDefault` config tags |
 | `Channel() string` | `"dev"` or `"release"` |
-| `String() string` | the stamp rendered for a `version` subcommand |
-| `(Info) Marshal() ([]byte, error)` | JSON encoding |

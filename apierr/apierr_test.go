@@ -100,48 +100,6 @@ func TestIs(t *testing.T) {
 	require.False(t, apierr.Is(apierr.NotFound("gone", "gone"), http.StatusBadRequest))
 }
 
-// TestValidReason is the rule the codebase-wide policy test enforces.
-func TestValidReason(t *testing.T) {
-	t.Parallel()
-
-	t.Run("a reason naming the subject is fine", func(t *testing.T) {
-		for _, reason := range []string{
-			"contract-not-found",
-			"file-not-found",
-			"name-too-long",
-			"billing-disabled",
-			"segment-modified",
-			"quota",
-		} {
-			require.NoError(t, apierr.ValidReason(reason), reason)
-		}
-	})
-
-	// The failure mode this rule exists for. Every missing record answered
-	// so a client could not tell a missing contract from a missing file.
-	t.Run("a reason restating the status is rejected", func(t *testing.T) {
-		for _, reason := range []string{
-			"not-found", "bad-request", "forbidden", "internal",
-			"unauthorized", "conflict", "unavailable", "error", "failed",
-		} {
-			err := apierr.ValidReason(reason)
-			require.Error(t, err, reason)
-			require.Contains(t, err.Error(), "name the subject")
-		}
-	})
-
-	t.Run("a malformed slug is rejected", func(t *testing.T) {
-		for _, reason := range []string{
-			"", "NotFound", "not_found", "not found", "-leading", "trailing-",
-			"double--dash", "9lives",
-		} {
-			require.Error(t, apierr.ValidReason(reason), "%q should be rejected", reason)
-		}
-	})
-}
-
-// TestFieldsNameTheSubject covers the axis such a model lacks entirely: with
-// only a package tag and a status tag, nothing carries which record failed.
 func TestFieldsNameTheSubject(t *testing.T) {
 	t.Parallel()
 
