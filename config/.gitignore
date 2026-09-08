@@ -1,0 +1,2 @@
+.cache/
+golangci-lint-report.xml
