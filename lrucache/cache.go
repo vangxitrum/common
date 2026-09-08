@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"aioz-depin/pkg/common/time2"
+	"gitlab.internal/tuan.quang.tran/aioz-common/time2"
 
 	"github.com/spacemonkeygo/monkit/v3"
 )

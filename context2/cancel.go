@@ -15,7 +15,7 @@ type cancelContext struct {
 	err error
 }
 
-// WithCustomCancel creates a new context that can be cancelled with
+// WithCustomCancel creates a new context that can be canceled with
 // a custom error.
 func WithCustomCancel(
 	parent context.Context,
@@ -35,7 +35,7 @@ func (ctx *cancelContext) cancel(err error) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 
-	// if we have already cancelled, we shouldn't
+	// if we have already canceled, we shouldn't
 	// update the error.
 	if ctx.err != nil {
 		return
@@ -55,7 +55,7 @@ func (ctx *cancelContext) Err() error {
 
 	ctx.mu.Lock()
 	// When ctx.err == nil and the ctx.Context != nil,
-	// it means the parent context has been cancelled
+	// it means the parent context has been canceled
 	// however the current context has not.
 	if ctx.err == nil {
 		// Propagate the error from the parent context.

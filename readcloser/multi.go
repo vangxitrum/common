@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/zeebo/errs"
+	"github.com/zeebo/errs/v2"
 )
 
 type eofReadCloser struct{}

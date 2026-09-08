@@ -6,15 +6,16 @@ package errs2
 import (
 	"context"
 	"errors"
-
-	"github.com/zeebo/errs"
 )
 
 // IsCanceled returns true, when the error is a cancellation.
+//
+// [errors.Is] walks a wrap chain and a multi-error alike, and errs/v2's group
+// type implements both Unwrap and Is, so a cancellation stays visible through
+// an [errs.Combine]. The errs.IsFunc this used to call predates errors.Is and
+// no longer exists in v2.
 func IsCanceled(err error) bool {
-	return errs.IsFunc(err, func(err error) bool {
-		return errors.Is(err, context.Canceled)
-	})
+	return errors.Is(err, context.Canceled)
 }
 
 // IgnoreCanceled returns nil, when the operation was about canceling.

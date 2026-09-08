@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"aioz-depin/internal/date"
+	"gitlab.internal/tuan.quang.tran/aioz-common/date"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

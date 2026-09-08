@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"aioz-depin/internal/slices2"
+	"gitlab.internal/tuan.quang.tran/aioz-common/slices2"
 
 	"github.com/stretchr/testify/require"
 )

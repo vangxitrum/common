@@ -6,7 +6,7 @@ package errs2
 import (
 	"time"
 
-	"github.com/zeebo/errs"
+	"github.com/zeebo/errs/v2"
 )
 
 // Collect returns first error from channel and all errors that happen within duration.

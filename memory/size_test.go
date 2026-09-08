@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"aioz-depin/internal/memory"
+	"gitlab.internal/tuan.quang.tran/aioz-common/memory"
 
 	"github.com/stretchr/testify/require"
 )

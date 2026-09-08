@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"aioz-depin/internal/testcontext"
-	"aioz-depin/pkg/common/time2"
+	"gitlab.internal/tuan.quang.tran/aioz-common/stats/testcontext"
+	"gitlab.internal/tuan.quang.tran/aioz-common/time2"
 
 	"github.com/stretchr/testify/require"
-	"github.com/zeebo/errs"
+	"github.com/zeebo/errs/v2"
 )
 
 func TestCache_LRU(t *testing.T) {
@@ -76,21 +76,21 @@ func TestCache_Get_Fuzz(t *testing.T) {
 				value, err := cache.Get(ctx, key, func() (interface{}, error) {
 					ran = true
 					if shouldErr {
-						return nil, errs.New("random error")
+						return nil, errs.Errorf("random error")
 					}
 					return key, nil
 				})
 
 				if ran {
 					if shouldErr && err == nil {
-						return errs.New("should have errored and did not")
+						return errs.Errorf("should have errored and did not")
 					}
 					if !shouldErr && err != nil {
-						return errs.New("should not have errored but did")
+						return errs.Errorf("should not have errored but did")
 					}
 				}
-				if value != key && !(ran && shouldErr) {
-					return errs.New("expected %q but got %q", key, value)
+				if value != key && (!ran || !shouldErr) {
+					return errs.Errorf("expected %q but got %q", key, value)
 				}
 			}
 		})

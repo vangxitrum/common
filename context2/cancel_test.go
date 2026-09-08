@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"aioz-depin/internal/context2"
-	"aioz-depin/internal/testcontext"
+	"gitlab.internal/tuan.quang.tran/aioz-common/context2"
+	"gitlab.internal/tuan.quang.tran/aioz-common/stats/testcontext"
 
 	"github.com/stretchr/testify/require"
 )
