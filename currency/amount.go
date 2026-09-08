@@ -1,11 +1,38 @@
-// Package currency carries exact money amounts.
+// Package currency represents money as a whole number of tiny units.
 //
-// Money is never held as a float and never as a scaled decimal in a database
-// column. Compensation arithmetic multiplies byte-hours - which overflow int64 -
-// by per-TB rates with many significant digits, so the arithmetic is done in
-// decimal and the result stored as an exact integer count of base units. 18
-// decimals is far more precision than any rate needs, which means rounding
-// happens once, at the boundary, and never accumulates.
+// The rule this package exists to enforce is that money is never a float.
+// 0.1 + 0.2 is not 0.3 in binary floating point, and a ledger that adds a few
+// million such amounts drifts by an amount nobody can account for afterwards.
+// The fix is the one banks have always used: count the smallest unit and never
+// divide it. Cents, rather than dollars.
+//
+// Here the smallest unit is much smaller than a cent. An Amount is an integer
+// count of base units at 18 decimal places - "attousd" for dollars, "attoaioz"
+// for the AIOZ token, following the convention the token itself uses on chain.
+// A dollar is 10^18 attousd. That is far more precision than any price needs,
+// which is the point: intermediate results never need rounding, so rounding
+// happens once, where a number is finally converted, instead of accumulating a
+// little at every step.
+//
+// Two types divide the work:
+//
+//   - Amount is a quantity of money that someone owes, holds or was paid. USD
+//     and AIOZ are the two instantiations.
+//   - Decimal is a rate or a ratio - a price per TB, a share of revenue. It is
+//     not money; it is what money gets computed from.
+//
+// The workflow is to compute in Decimal and store an Amount:
+//
+//	price  := currency.NewDecimalFromString("0.00000208")  // USD per GB-hour
+//	usage  := currency.NewDecimalFromInt(gbHours)
+//	owed   := currency.FromDecimal[currency.USDUnit](price.Mul(usage).Shopspring())
+//
+//	balance = balance.Add(owed)
+//	fmt.Println(owed.Units())    // "3.120000" - for a human
+//	fmt.Println(owed.String())   // "3120000000000000000" - for the database
+//
+// The currency is part of the type, so adding dollars to tokens does not
+// compile. See Amount for why that is worth a type parameter.
 package currency
 
 import (
@@ -126,6 +153,36 @@ func FromString[U Unit](s string) (Amount[U], error) {
 		)
 	}
 	return Amount[U]{amount: amount}, nil
+}
+
+// Parse reads a display-unit string - "3.12", "0.00000208" - the form a human
+// writes in a config file or a CSV. It rounds to base units once, here.
+//
+// This is the counterpart of Units, as FromString is the counterpart of String.
+// The two parsers exist because the two forms are for different readers: the
+// base-unit integer round-trips exactly and is what goes in the database, while
+// the display form is what a person types.
+func Parse[U Unit](s string) (Amount[U], error) {
+	if s == "" {
+		return Amount[U]{}, nil
+	}
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		var u U
+		return Amount[U]{}, Error.Errorf("invalid %s amount %q: %v", u.Denom(), s, err)
+	}
+	return FromDecimal[U](d), nil
+}
+
+// MustParse is Parse for a string that is known good at author time - a
+// constant default, a fixture - where an error has nowhere to go. It panics
+// rather than returning one.
+func MustParse[U Unit](s string) Amount[U] {
+	amount, err := Parse[U](s)
+	if err != nil {
+		panic(err)
+	}
+	return amount
 }
 
 // Denom returns the base denomination name, such as "attoaioz".

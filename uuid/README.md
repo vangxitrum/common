@@ -1,10 +1,35 @@
 # uuid
 
-A UUID that is safe to compare, use as a map key, and store.
+Identifiers that can be generated anywhere.
 
 ```go
 import "gitlab.internal/tuan.quang.tran/aioz-common/uuid"
 ```
+
+## What a UUID is, and when to reach for one
+
+A UUID is a 128-bit number, generated so that two of them are for practical
+purposes never equal. The point is that **nobody has to hand them out**: a
+service, a worker, a test fixture or a client can each mint one without asking a
+database for the next value and without coordinating with anyone.
+
+That is the whole difference from an auto-increment integer, and it decides
+several things at once:
+
+- **An id exists before the row does.** A caller can know the identifier of a
+  thing it has only just started creating, which is what lets it write related
+  rows in one go, or return the id from a request that queues the real work.
+- **Records from separate machines merge without renumbering.** Two shards, two
+  regions, or an offline client and a server cannot collide.
+- **An id leaks nothing.** `/orders/1834` tells a stranger roughly how many
+  orders exist and lets them guess the next one; a UUID tells them nothing.
+
+The cost is size and ordering: sixteen bytes rather than eight, and no natural
+sequence unless the id carries a timestamp. Which is why these are version 7.
+
+**Use one for anything crossing a boundary** - a row's primary key, a request
+id, a job id. **Do not use one** where a small dense integer is genuinely
+better, such as an enum or an index into an in-memory table.
 
 ## Why a `[16]byte`
 

@@ -1,10 +1,31 @@
-// Package uuid is a UUID that is safe to compare, map-key and store.
+// Package uuid provides identifiers that can be generated anywhere.
 //
-// It exists because the obvious alternatives each give something up. A bare
-// string does not validate and costs an allocation everywhere. A []byte is not
-// comparable with ==, cannot be a map key, is nil-or-zero ambiguous, and lets a
-// caller mutate an id another goroutine is holding. The underlying array here
-// makes all four impossible.
+// A UUID is a 128-bit number, generated so that two of them are for practical
+// purposes never equal. The point is that nobody has to hand them out: a
+// service, a worker, a test fixture or a client can each mint one without
+// asking a database for the next value and without coordinating with anyone.
+//
+// That is the difference from an auto-increment integer, and it decides several
+// things at once. An id can be assigned before the row is written, so a caller
+// knows the identifier of a thing it has only just started creating. Records
+// created on separate machines can be merged without renumbering. And an id in
+// a URL or a log leaks nothing about how many exist, which a sequential integer
+// does.
+//
+// The cost is size and ordering: sixteen bytes rather than eight, and no
+// natural sequence unless the id carries a timestamp. New returns version 7
+// ids, which carry one - see New.
+//
+//	id, err := uuid.New()
+//	fmt.Println(id)                     // 0195a4c7-8f3e-7b21-9c4d-1f2e3a4b5c6d
+//	id.IsNil()                          // false
+//
+//	var absent uuid.UUID                // the zero value is the nil UUID
+//	absent == uuid.Nil                  // true
+//
+// The type is an array, so it compares with ==, works as a map key, and cannot
+// be mutated by whoever it was handed to. See the README for why the more
+// obvious []byte and string representations each give one of those up.
 package uuid
 
 import (

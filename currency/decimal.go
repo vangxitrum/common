@@ -44,6 +44,18 @@ func NewDecimalFromString(value string) (Decimal, error) {
 	return Decimal(d), nil
 }
 
+// MustDecimal is NewDecimalFromString for a rate that is known good at author
+// time - a constant default in a config package, a fixture. Rates are written
+// as string constants precisely so they are exact; this is how one becomes a
+// Decimal without an error return nobody can act on.
+func MustDecimal(value string) Decimal {
+	d, err := NewDecimalFromString(value)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
 // NewDecimalFromBigInt builds a Decimal from a coefficient and an exponent,
 // giving coefficient * 10^exponent.
 func NewDecimalFromBigInt(coefficient int64, exponent int32) Decimal {

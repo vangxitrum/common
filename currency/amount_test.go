@@ -159,3 +159,42 @@ func TestDenomsAreDistinct(t *testing.T) {
 func TestCurrenciesDoNotMix(t *testing.T) {
 	require.NotEqual(t, currency.USD{}.Denom(), currency.AIOZ{}.Denom())
 }
+
+// TestParseIsTheDisplayForm: Parse reads what a person writes in a config file;
+// FromString reads what the database stores. Mixing them up is the mistake this
+// pair of tests pins down.
+func TestParseIsTheDisplayForm(t *testing.T) {
+	fromDisplay, err := currency.Parse[currency.USDUnit]("3.12")
+	require.NoError(t, err)
+	require.Equal(t, "3120000000000000000", fromDisplay.String())
+	require.Equal(t, "3.120000", fromDisplay.Units())
+
+	fromBase, err := currency.FromString[currency.USDUnit]("3120000000000000000")
+	require.NoError(t, err)
+	require.True(t, fromDisplay.Equal(fromBase))
+
+	// The same string means different amounts to the two parsers.
+	viaParse, err := currency.Parse[currency.USDUnit]("5")
+	require.NoError(t, err)
+	viaFromString, err := currency.FromString[currency.USDUnit]("5")
+	require.NoError(t, err)
+	require.False(t, viaParse.Equal(viaFromString))
+	require.Equal(t, "5.000000", viaParse.Units())
+	require.Equal(t, int64(5), viaFromString.BaseUnits().Int64())
+}
+
+func TestParseRejectsGarbageAndMustPanics(t *testing.T) {
+	_, err := currency.Parse[currency.AIOZUnit]("not-a-number")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "attoaioz")
+
+	require.Panics(t, func() { currency.MustParse[currency.AIOZUnit]("nope") })
+	require.Panics(t, func() { currency.MustDecimal("nope") })
+	require.NotPanics(t, func() { currency.MustDecimal("0.00000208") })
+}
+
+func TestParseEmptyIsZero(t *testing.T) {
+	amount, err := currency.Parse[currency.USDUnit]("")
+	require.NoError(t, err)
+	require.True(t, amount.IsZero())
+}
