@@ -1,6 +1,6 @@
-# aioz-stats
+# stats
 
-A shared debug and observability package for AIOZ backend services. It bundles a single HTTP debug server that exposes:
+The debug and observability packages of `aioz-common`. They bundle a single HTTP debug server that exposes:
 
 - **Monkit metrics** (p50 / p95 / p99 latencies, call counts, error rates) at `/metrics` in Prometheus format
 - **pprof** CPU, heap, goroutine, and trace profiles at `/debug/pprof/`
@@ -133,17 +133,41 @@ Use `debug.Cycle` to add pause/trigger/resume buttons for any background worker 
 srv.Panel.Add(debug.Cycle("GC Worker", gcWorker))
 ```
 
-`CycleController` requires `TriggerWait()`, `Pause()`, and `Restart()` — `sync2.Cycle` from `aioz-depin` satisfies this interface.
+`CycleController` requires `TriggerWait()`, `Pause()` and `Restart()`. [`aioz-common/cycle`](../cycle/README.md) satisfies this interface, as does depin's `sync2.Cycle`.
 
 ### Setting build version info
 
-Pass version details at link time:
+**Usually nothing.** Since Go 1.18 the toolchain embeds the commit, the commit
+timestamp and whether the tree was dirty into every binary, and
+[`version`](../version/README.md) reads them back, so `/version/` and
+`version_info` are populated with no build wiring at all.
+
+The one thing `go build` does not supply is the tag, because `bi.Main.Version`
+is set only by `go install module@version`. That needs a single link-time flag:
 
 ```makefile
-go build -ldflags "\
-  -X gitlab.internal/tuan.quang.tran/aioz-common/stats/version.Build.Release=v1.2.3 \
-  -X gitlab.internal/tuan.quang.tran/aioz-common/stats/version.Build.SHA=$(git rev-parse HEAD) \
-  -X gitlab.internal/tuan.quang.tran/aioz-common/stats/version.Build.Build=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+VERSION_PKG := gitlab.internal/tuan.quang.tran/aioz-common/version
+LDFLAGS := -X $(VERSION_PKG).buildVersion=$(shell git describe --tags --abbrev=0) \
+           -X $(VERSION_PKG).channel=release
+
+build:
+	go build -ldflags "$(LDFLAGS)" ./cmd/...
+```
+
+Two traps, both of which earlier versions of this document walked into:
+
+- **`-X` only patches a plain `string` variable.** Aimed at a struct field such
+  as `Build.Version` it names a symbol that does not exist, and the linker
+  **silently drops it** - no error, no value. The targets above are package
+  level variables for exactly this reason.
+- **Use `--abbrev=0`.** Bare `git describe` yields `v2.4.1-3-gabc1234`, which
+  semver reads as a *prerelease of* v2.4.1, so a build three commits past the
+  tag sorts below it. See [`version`](../version/README.md).
+
+To surface the build stamp in `/metrics` as well as on `/version/`:
+
+```go
+version.Register(nil)   // nil means monkit.Default
 ```
 
 ---
@@ -154,7 +178,7 @@ go build -ldflags "\
 |---|---|
 | `GET /` | HTML index of all endpoints |
 | `GET /health` | Returns `OK` — use as liveness probe |
-| `GET /version/` | Build version JSON |
+| `GET /version/` | Build stamp JSON, from [`version`](../version/README.md) |
 | `GET /metrics` | Monkit stats in Prometheus exposition format |
 | `GET /mon/` | Interactive monkit stats browser |
 | `GET /top` | HTTP request counts per path, ranked by frequency |

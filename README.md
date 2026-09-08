@@ -37,10 +37,13 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/base58`](base58/README.md) | `base58` | base58 and base58check, vendored from btcd. |
 | [`aioz-common/stats/debug`](stats/README.md) | `debug` | Single HTTP debug server: monkit metrics in Prometheus format, pprof, request-frequency `/top`, `/version/`, `/health`, dynamic log level. |
 | [`aioz-common/stats/monitor`](stats/monitor/README.md) | `monitor` | Registers process and runtime series (goroutines, memory, GC, rusage, fds, uptime) into a monkit registry, so `/metrics` is not empty before the first request. |
-| [`aioz-common/stats/testcontext`](stats/README.md) | `testcontext` | Test helper: a context canceled when the test ends, with `Go`/`Wait`/`Cleanup` for tracking background goroutines and reporting their errors against the test. |
+| [`aioz-common/stats/testcontext`](stats/testcontext/README.md) | `testcontext` | Test helper: a context canceled when the test ends, with `Go`/`Wait`/`Cleanup` for tracking background goroutines and reporting their errors against the test. |
+| [`aioz-common/stats/version`](stats/version/README.md) | `version` | **Deprecated.** Aliases forwarding to [`version`](version/README.md), which is where the package now lives. |
 
 Each component keeps its own README with the full API reference and examples -
-follow the links above.
+follow the links above. [`docs/ADOPTING.md`](docs/ADOPTING.md) covers what a
+service wires up on day one and how the packages fit together;
+[`CHANGELOG.md`](CHANGELOG.md) records what changed between versions.
 
 ## Layout
 
