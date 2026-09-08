@@ -17,6 +17,8 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/logging`](logging/README.md) | `logging` | The config layer over `logger`: the `Config` that builds the process handler, plus level/format parsing and a pre-config `Bootstrap` logger. |
 | [`aioz-common/apierr`](apierr/README.md) | `apierr` | Errors that cross the HTTP boundary: status, machine-readable reason slug and underlying cause, plus `Trace`/`Tags` for reaching the origin stack through a wrap chain. A service defines its own reasons on top. |
 | [`aioz-common/lifecycle`](lifecycle/README.md) | `lifecycle` | Starts a service's components together and closes them in reverse order, with named goroutines, pprof labels and a shutdown-timeout stack dump. |
+| [`aioz-common/uuid`](uuid/README.md) | `uuid` | A `[16]byte` UUID (version 7, so ids sort by creation time): comparable, usable as a map key, immutable once held, with SQL, JSON and gogo/protobuf handling. |
+| [`aioz-common/currency`](currency/README.md) | `currency` | Exact money. `USD` and `AIOZ` as integer counts of base units, which cannot be added to each other because the currency is part of the type, plus the `Decimal` used to compute them. |
 | [`aioz-common/cycle`](cycle/README.md) | `cycle` | Runs a function on an interval, with `Trigger`/`TriggerWait` so a background chore is testable without sleeping. |
 | [`aioz-common/stats/debug`](stats/README.md) | `debug` | Single HTTP debug server: monkit metrics in Prometheus format, pprof, request-frequency `/top`, `/version/`, `/health`, dynamic log level. |
 | [`aioz-common/stats/monitor`](stats/monitor/README.md) | `monitor` | Registers process and runtime series (goroutines, memory, GC, rusage, fds, uptime) into a monkit registry, so `/metrics` is not empty before the first request. |
@@ -32,10 +34,12 @@ follow the links above.
 aioz-common/
 ├── apierr/           # HTTP error envelope
 ├── config/           # configuration
+├── currency/         # exact money and rates
 ├── cycle/            # interval runner
 ├── lifecycle/        # component start/stop
 ├── logger/           # the slog.Handler
 ├── logging/          # its configuration
+├── uuid/             # identifiers
 └── stats/            # observability
     ├── debug/        # the debug HTTP server
     ├── monitor/      # process and runtime series

@@ -3,6 +3,9 @@ module gitlab.internal/tuan.quang.tran/aioz-common
 go 1.25.0
 
 require (
+	cosmossdk.io/math v1.4.0
+	github.com/google/uuid v1.6.0
+	github.com/shopspring/decimal v1.4.0
 	github.com/spacemonkeygo/monkit/v3 v3.0.24
 	github.com/spf13/cast v1.10.0
 	github.com/spf13/cobra v1.10.2
@@ -25,6 +28,7 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db // indirect
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 )

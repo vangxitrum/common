@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -169,6 +170,16 @@ func fromBuildInfo() Info {
 // existing tag, such as v1.0.3-0.<ts>-<commit>.
 func isPseudoVersion(v string) bool {
 	const tsLen, hashLen = 14, 12
+
+	// Go 1.24 and later append the +dirty build metadata suffix to the
+	// synthesized version when the working tree is modified. Semver build
+	// metadata is not part of the version, and leaving it on would end-anchor
+	// the checks below on "dirty" rather than on the commit prefix, so a
+	// pseudo-version from a dirty tree would be mistaken for a real one.
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i]
+	}
+
 	// <sep> <14 digits> '-' <12 hex>
 	if len(v) < 1+tsLen+1+hashLen {
 		return false
