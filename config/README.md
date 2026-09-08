@@ -136,6 +136,7 @@ Highest precedence first:
 | `hidden:"true"` | hidden from help, and never persisted |
 | `deprecated:"true"` | hidden from help; persisted unless `SaveConfigRemovingDeprecated` |
 | `user:"true"` | always written live in the generated file, even at its default |
+| `secret:"true"` / `secret:"optional"` | the field holds a secret; a `default` or `releaseDefault` on it panics, and `"true"` also makes it required at startup, see below |
 | `source:"flag"` | command line only; never persisted |
 | `path:"true"` | run the default through `filepath.FromSlash` |
 | `basic-help:"true"` | include in short help |
@@ -165,6 +166,59 @@ Defining only a default for a build you are *not* doing panics, rather than
 silently binding the zero value. The build kind comes from `DefaultsFlag`,
 which reads `--defaults` off the command line, falling back to `SetRelease`.
 Release binaries should call `config.SetRelease(true)` from `main`.
+
+### Secrets
+
+A field that holds a secret says so, and that changes two things.
+
+```go
+type Config struct {
+    Wallet struct {
+        Password string `help:"wallet encryption password" secret:"true"`
+    }
+    Telemetry struct {
+        BearerToken string `help:"remote write bearer token" secret:"optional"`
+    }
+}
+```
+
+**A secret cannot ship with a value.** A `default` or `releaseDefault` on a
+`secret` field panics at bind time, naming the field, the flag and the
+offending value. That is the whole point: a default reaches production, so a
+placeholder password in the source tree is the password of every deployment
+that never overrode it, and it is in every clone, every image and every CI log.
+It is not a weak secret, it is a public one.
+
+For local convenience, pair a `devDefault` with an explicitly empty
+`releaseDefault` (which the default-precedence rules require anyway):
+
+```go
+Password string `secret:"true" devDefault:"dev-only" releaseDefault:""`
+```
+
+The pair states in the tag itself that nothing ships.
+
+**A required secret must be set before the process starts.** Call
+`CheckSecrets` once after `Load` and refuse to start if it returns an error:
+
+```go
+if err := config.CheckSecrets(&cfg); err != nil {
+    return err
+}
+```
+
+It reports **every** unset required secret at once, with the field path, the
+flag an operator sets and the help text, because reporting one at a time turns
+a single deployment fix into as many restarts as there are missing values.
+
+`secret:"optional"` is for a secret whose feature is off until it is
+configured, such as a telemetry bearer token. It still may not carry a shipped
+default; it is just allowed to be empty.
+
+The two halves are one rule and neither works alone. Bind makes a shipped
+secret impossible; `CheckSecrets` makes an unset one a failure to boot. Without
+the first, the second passes on the placeholder. Without the second, removing
+the placeholder silently yields an empty key.
 
 ### Directory variables
 
@@ -199,6 +253,7 @@ A setup command that may run against an existing config should `Load` before
 | `BindFlags(flags, &cfg, opts...)` | bind to a bare `pflag.FlagSet`, for tests and harnesses |
 | `Load(cmd, opts...) (*LoadResult, error)` | read files and environment into every struct bound to `cmd` |
 | `SaveConfig(cmd, path, opts...)` | write the config file |
+| `CheckSecrets(cfg) error` | report every required secret that is still unset; call it at startup |
 | `Viper(cmd, opts...)` | the underlying viper, built on first use |
 | `ReadConfigFiles(cmd, vip)` | the default file-reading step, for use inside a custom loader |
 | `New() *Registry` | an isolated registry, for tests or long-lived processes |

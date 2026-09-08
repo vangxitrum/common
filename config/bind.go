@@ -238,6 +238,8 @@ func bindConfig(
 			flagname = prefix + flagname
 		}
 
+		checkSecretTag(field.Tag, flagname, field.Name)
+
 		onlyForSetup := (field.Tag.Get("setup") == "true") || setupStruct
 		// ignore setup params for non setup commands
 		if !setupCommand && onlyForSetup {
