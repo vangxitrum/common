@@ -18,6 +18,7 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/apierr`](apierr/README.md) | `apierr` | Errors that cross the HTTP boundary: status, machine-readable reason slug and underlying cause, plus `Trace`/`Tags` for reaching the origin stack through a wrap chain. A service defines its own reasons on top. |
 | [`aioz-common/lifecycle`](lifecycle/README.md) | `lifecycle` | Starts a service's components together and closes them in reverse order, with named goroutines, pprof labels and a shutdown-timeout stack dump. |
 | [`aioz-common/version`](version/README.md) | `version` | The build stamp, read from the toolchain's embedded VCS info so no Makefile wiring is needed: a comparable `SemVer`, a derived dev version that sorts below every release, the dev/release defaults channel, and a `version_info` metrics series. |
+| [`aioz-common/jwt`](jwt/README.md) | `jwt` | Signed tokens for a verifier that cannot reach the issuer's database, with a shared secret or a key pair. The algorithm is pinned at construction and the header's `alg` is never trusted, so algorithm confusion and `none` are closed; an expiry is required; a `Ring` rotates keys without invalidating tokens in flight. |
 | [`aioz-common/secret`](secret/README.md) | `secret` | Bearer secrets that are never at rest in a replayable form: `Token` redacts itself in fmt, slog, JSON and SQL and refuses to be stored, `Hash` is what you keep. Prefixed API keys with an embedded lookup id, and recovery codes that fold what a person mistypes. |
 | [`aioz-common/uuid`](uuid/README.md) | `uuid` | Identifiers anything can generate without coordinating - no database round trip, no collisions across machines. A `[16]byte`, so it is comparable and works as a map key; version 7, so ids sort by creation time. |
 | [`aioz-common/currency`](currency/README.md) | `currency` | Money as a whole number of tiny units, so it never touches a float. `USD` and `AIOZ` count base units at 18 decimals and cannot be added to each other, because the currency is part of the type; `Decimal` is the rate they are computed from. |
@@ -56,6 +57,7 @@ aioz-common/
 ├── leak/             # resource-leak tracking
 ├── lifecycle/        # component start/stop
 ├── logger/           # the slog.Handler
+├── jwt/              # signed tokens, algorithm pinned
 ├── logging/          # its configuration
 ├── lrucache/         # LRU + TTL + single-flight fill
 ├── memory/           # byte counts with units
