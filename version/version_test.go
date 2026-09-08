@@ -51,7 +51,7 @@ func TestLinkVarsFillGaps(t *testing.T) {
 	defer restore()
 
 	info := fromBuildInfo()
-	if info.Version != "v1.2.3" {
+	if info.Version.String() != "v1.2.3" {
 		t.Fatalf("version: got %q", info.Version)
 	}
 	if info.CommitHash != "abc123" {
@@ -126,7 +126,7 @@ func TestModifiedIsNotARelease(t *testing.T) {
 	}
 
 	info.Modified = true
-	info.Release = info.Version != "" && info.CommitHash != "" &&
+	info.Release = !info.Version.IsZero() && info.CommitHash != "" &&
 		!info.Timestamp.IsZero() && !info.Modified
 	if info.Release {
 		t.Fatal("a modified tree must not produce a release build")
