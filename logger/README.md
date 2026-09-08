@@ -176,7 +176,7 @@ h, _ := logger.New(logger.Config{
 })
 ```
 
-### Rotation behaviour
+### Rotation behavior
 
 When the file reaches `MaxSize`:
 

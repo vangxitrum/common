@@ -34,7 +34,7 @@ func HashOf(presented string) Hash {
 // Verify reports whether presented hashes to stored, in constant time.
 //
 // It is the single entry point for checking a secret, so that a future hash
-// scheme has exactly one place to dispatch from. An unrecognised scheme
+// scheme has exactly one place to dispatch from. An unrecognized scheme
 // returns false; it never panics and never returns true.
 func Verify(presented string, stored Hash) bool {
 	switch stored.Scheme() {

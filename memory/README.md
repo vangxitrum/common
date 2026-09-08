@@ -52,7 +52,7 @@ in one family regardless.
 `MarshalText` returns `(string, error)`, not `([]byte, error)`, so `Size` does
 **not** satisfy `encoding.TextMarshaler`. `encoding/json` therefore ignores it
 and uses `MarshalJSON`, which is present and correct; a library that reaches
-for `TextMarshaler` alone will silently fall back to marshalling the underlying
+for `TextMarshaler` alone will silently fall back to marshaling the underlying
 `int64`. `UnmarshalText` has the standard signature and does satisfy
 `encoding.TextUnmarshaler`, so the asymmetry only bites on the way out.
 

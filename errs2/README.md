@@ -1,6 +1,6 @@
 # errs2
 
-Two things `errors` does not do: recognise a cancellation, and collect the
+Two things `errors` does not do: recognize a cancellation, and collect the
 errors from a group of goroutines instead of only the first.
 
 ```go

@@ -17,11 +17,12 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/logging`](logging/README.md) | `logging` | The config layer over `logger`: the `Config` that builds the process handler, plus level/format parsing and a pre-config `Bootstrap` logger. |
 | [`aioz-common/apierr`](apierr/README.md) | `apierr` | Errors that cross the HTTP boundary: status, machine-readable reason slug and underlying cause, plus `Trace`/`Tags` for reaching the origin stack through a wrap chain. A service defines its own reasons on top. |
 | [`aioz-common/lifecycle`](lifecycle/README.md) | `lifecycle` | Starts a service's components together and closes them in reverse order, with named goroutines, pprof labels and a shutdown-timeout stack dump. |
+| [`aioz-common/secret`](secret/README.md) | `secret` | Bearer secrets that are never at rest in a replayable form: `Token` redacts itself in fmt, slog, JSON and SQL and refuses to be stored, `Hash` is what you keep. Prefixed API keys with an embedded lookup id, and recovery codes that fold what a person mistypes. |
 | [`aioz-common/uuid`](uuid/README.md) | `uuid` | Identifiers anything can generate without coordinating - no database round trip, no collisions across machines. A `[16]byte`, so it is comparable and works as a map key; version 7, so ids sort by creation time. |
 | [`aioz-common/currency`](currency/README.md) | `currency` | Money as a whole number of tiny units, so it never touches a float. `USD` and `AIOZ` count base units at 18 decimals and cannot be added to each other, because the currency is part of the type; `Decimal` is the rate they are computed from. |
 | [`aioz-common/cycle`](cycle/README.md) | `cycle` | Runs a function on an interval, with `Trigger`/`TriggerWait` so a background chore is testable without sleeping. |
 | [`aioz-common/time2`](time2/README.md) | `time2` | A `Clock` carried on the context, so code under test advances time instead of spending it; `Machine` drives timers and tickers deterministically. |
-| [`aioz-common/memory`](memory/README.md) | `memory` | A byte count that carries its unit. Parses and prints both the base-2 and base-10 families, binds to a flag, and survives YAML and JSON as a string rather than an unlabelled number. |
+| [`aioz-common/memory`](memory/README.md) | `memory` | A byte count that carries its unit. Parses and prints both the base-2 and base-10 families, binds to a flag, and survives YAML and JSON as a string rather than an unlabeled number. |
 | [`aioz-common/date`](date/README.md) | `date` | Month and day boundaries in UTC, and the arithmetic between them, so every billing and reporting query agrees on where a month starts. |
 | [`aioz-common/period`](period/README.md) | `period` | A calendar month as a comparable value, with the half-open time range it stands for. The `YYYY-MM` format is validated once, at the edge. |
 | [`aioz-common/lrucache`](lrucache/README.md) | `lrucache` | An LRU with a TTL that fills a miss once per key however many callers missed together, so an expiring hot key does not stampede the backend. |
@@ -35,7 +36,7 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/stats/debug`](stats/README.md) | `debug` | Single HTTP debug server: monkit metrics in Prometheus format, pprof, request-frequency `/top`, `/version/`, `/health`, dynamic log level. |
 | [`aioz-common/stats/monitor`](stats/monitor/README.md) | `monitor` | Registers process and runtime series (goroutines, memory, GC, rusage, fds, uptime) into a monkit registry, so `/metrics` is not empty before the first request. |
 | [`aioz-common/stats/version`](stats/version/README.md) | `version` | The build stamp, read from the toolchain's embedded VCS info so no Makefile wiring is needed, plus the dev/release defaults channel. |
-| [`aioz-common/stats/testcontext`](stats/README.md) | `testcontext` | Test helper: a context with goroutine tracking and deadline handling. |
+| [`aioz-common/stats/testcontext`](stats/README.md) | `testcontext` | Test helper: a context canceled when the test ends, with `Go`/`Wait`/`Cleanup` for tracking background goroutines and reporting their errors against the test. |
 
 Each component keeps its own README with the full API reference and examples -
 follow the links above.
@@ -60,6 +61,7 @@ aioz-common/
 ├── memory/           # byte counts with units
 ├── period/           # a calendar month as a value
 ├── readcloser/       # io.ReadCloser combinators
+├── secret/           # bearer secrets and their hashes
 ├── signal/           # one-shot errors, lazy channels
 ├── slices2/          # Map and its fallible forms
 ├── time2/            # testable clocks and timers
@@ -103,6 +105,9 @@ preserved here:
 `apierr`, `cycle`, `lifecycle`, `logging`, `stats/monitor` and the link-time
 half of `stats/version` were then moved out of `aioz-template`'s
 `internal/utils/`, their histories carried over with `git subtree split`.
+
+`secret` is the one package here that was written for this module rather than
+moved into it.
 
 `base58`, `context2`, `date`, `errs2`, `leak`, `lrucache`, `memory`, `period`,
 `readcloser`, `signal`, `slices2` and `time2` came from `depin` the same way,
