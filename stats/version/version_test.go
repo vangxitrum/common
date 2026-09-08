@@ -95,6 +95,11 @@ func TestPseudoVersionIsNotAVersion(t *testing.T) {
 		"v0.0.0-20230601144555-f2db46069602",
 		"v1.0.3-0.20230601144555-f2db46069602",
 		"v0.0.0-20191109021931-daa7c04131f5",
+
+		// Go 1.24+ marks a build from a modified tree with +dirty. It is
+		// still a synthesized version and must still be discarded.
+		"v0.0.0-20230601144555-f2db46069602+dirty",
+		"v1.0.3-0.20230601144555-f2db46069602+dirty",
 	}
 	for _, v := range pseudo {
 		if !isPseudoVersion(v) {
