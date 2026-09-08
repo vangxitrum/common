@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/logging"
+	"gitlab.internal/tuan.quang.tran/aioz-common/logging"
 )
 
 func defaults() logging.Config {

@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/apierr"
+	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 )
 
 // constructors take the reason slug as their first argument.

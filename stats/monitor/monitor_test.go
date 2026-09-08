@@ -6,7 +6,7 @@ import (
 	"github.com/spacemonkeygo/monkit/v3"
 	"github.com/stretchr/testify/require"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/monitor"
+	"gitlab.internal/tuan.quang.tran/aioz-common/stats/monitor"
 )
 
 // collect walks a registry the way the debug server's /metrics endpoint does,

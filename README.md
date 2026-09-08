@@ -14,8 +14,13 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | --- | --- | --- |
 | [`aioz-common/config`](config/README.md) | `config` | Struct-tag driven configuration: defaults, help text and persistence rules on the struct; binds to flags, loads YAML + environment, generates a documented default config file. |
 | [`aioz-common/logger`](logger/README.md) | `logger` | A `slog.Handler` adding async dispatch, buffered/rotating file output, Graylog (GELF) shipping and per-level sampling on top of stdlib `log/slog`. |
+| [`aioz-common/logging`](logging/README.md) | `logging` | The config layer over `logger`: the `Config` that builds the process handler, plus level/format parsing and a pre-config `Bootstrap` logger. |
+| [`aioz-common/apierr`](apierr/README.md) | `apierr` | Errors that cross the HTTP boundary: status, machine-readable reason slug and underlying cause, with a policy test that stops slugs collapsing back to statuses. |
+| [`aioz-common/lifecycle`](lifecycle/README.md) | `lifecycle` | Starts a service's components together and closes them in reverse order, with named goroutines, pprof labels and a shutdown-timeout stack dump. |
+| [`aioz-common/cycle`](cycle/README.md) | `cycle` | Runs a function on an interval, with `Trigger`/`TriggerWait` so a background chore is testable without sleeping. |
 | [`aioz-common/stats/debug`](stats/README.md) | `debug` | Single HTTP debug server: monkit metrics in Prometheus format, pprof, request-frequency `/top`, `/version/`, `/health`, dynamic log level. |
-| [`aioz-common/stats/version`](stats/README.md) | `version` | Build metadata (release, SHA, timestamp) injected via `-ldflags -X`, served by the debug server. |
+| [`aioz-common/stats/monitor`](stats/monitor/README.md) | `monitor` | Registers process and runtime series (goroutines, memory, GC, rusage, fds, uptime) into a monkit registry, so `/metrics` is not empty before the first request. |
+| [`aioz-common/stats/version`](stats/version/README.md) | `version` | The build stamp: plain string vars for `-ldflags -X`, the dev/release defaults channel, and the `Info` the debug server serves. |
 | [`aioz-common/stats/testcontext`](stats/README.md) | `testcontext` | Test helper: a context with goroutine tracking and deadline handling. |
 
 Each component keeps its own README with the full API reference and examples -
@@ -25,13 +30,22 @@ follow the links above.
 
 ```
 aioz-common/
-├── config/           # package config
-├── logger/           # package logger
+├── apierr/           # HTTP error envelope
+├── config/           # configuration
+├── cycle/            # interval runner
+├── lifecycle/        # component start/stop
+├── logger/           # the slog.Handler
+├── logging/          # its configuration
 └── stats/            # observability
-    ├── debug/        # package debug
-    ├── version/      # package version
-    └── testcontext/  # package testcontext
+    ├── debug/        # the debug HTTP server
+    ├── monitor/      # process and runtime series
+    ├── version/      # the build stamp
+    └── testcontext/  # test helper
 ```
+
+`logging` is deliberately separate from `logger` rather than folded into it:
+both declare `Config`, `FileConfig` and `New`, so merging them is an API
+rewrite, not a move. `logger` is the handler; `logging` is what configures it.
 
 `version` and `testcontext` live under `stats/` because that is where they were
 authored (in the former `aioz-stats` repository) and moving them would break
@@ -58,4 +72,9 @@ preserved here:
 - `aioz-logger` → `logger/`
 - `aioz-stats`  → `stats/`
 
-The originals are archived and should no longer be imported.
+`apierr`, `cycle`, `lifecycle`, `logging`, `stats/monitor` and the link-time
+half of `stats/version` were then moved out of `aioz-template`'s
+`internal/utils/`, their histories carried over with `git subtree split`.
+
+The original library repositories are archived and should no longer be
+imported.

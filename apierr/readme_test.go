@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/apierr"
+	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 )
 
 // The recipes in the README's "Errors" section, verbatim, so documentation

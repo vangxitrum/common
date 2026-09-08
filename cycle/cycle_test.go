@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/cycle"
+	"gitlab.internal/tuan.quang.tran/aioz-common/cycle"
 )
 
 // counter records how many times the work ran.

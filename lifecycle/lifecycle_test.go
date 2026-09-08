@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/lifecycle"
+	"gitlab.internal/tuan.quang.tran/aioz-common/lifecycle"
 )
 
 func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }

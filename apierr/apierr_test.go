@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/zeebo/errs/v2"
 
-	"gitlab.internal/tuan.quang.tran/aioz-template/internal/utils/apierr"
+	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 )
 
 func TestConstructorsCarryStatusAndReason(t *testing.T) {

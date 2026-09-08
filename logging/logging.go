@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	logger "gitlab.internal/tuan.quang.tran/aioz-logger"
+	logger "gitlab.internal/tuan.quang.tran/aioz-common/logger"
 )
 
 // Config configures the process logger. It mirrors logger.Config, flattened,
