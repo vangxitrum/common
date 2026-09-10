@@ -70,31 +70,29 @@ test:
   script:
     - go test ./...
 
-# The container tests: everything the two client packages exist for - a
-# reconnect after the broker really goes away, a redelivery, a drain - can only
-# be exercised against a real server, so this job runs one. It is a separate
-# stage because it needs a privileged runner for docker-in-docker, which the
-# lint and test jobs must not wait on.
+# The container tests: everything the client packages exist for - a reconnect
+# after the broker really goes away, a redelivery, a drain - can only be
+# exercised against a real server, so this job runs one. It is a separate stage
+# so the lint and test jobs do not wait on container starts.
+#
+# The containers run on the runner's own docker daemon, through the socket the
+# runner mounts into every job; testcontainers finds that socket by itself and
+# reaches the containers through the job network's gateway. docker-in-docker
+# would give each job a daemon of its own, but it needs a privileged runner,
+# and ours is not one - the dind service dies at "mount: permission denied".
+#
+# Sharing the daemon has two consequences the tests account for. Ryuk stays on
+# (TESTCONTAINERS_RYUK_DISABLED is deliberately unset): the daemon outlives the
+# job, so a cancelled job would otherwise leave its containers running on the
+# runner. And a host port can be taken by another job's container, which the
+# rabbitmq tests, the only ones that bind a fixed port, retry past.
 integration:
   stage: integration
   image: ${GO_IMAGE}
-  services:
-    - name: docker:27-dind
-      alias: docker
-      command: ["--tls=false"]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   variables:
-    DOCKER_HOST: "tcp://docker:2375"
-    DOCKER_TLS_CERTDIR: ""
-    # Ryuk reaps containers by binding back to the daemon, which is awkward
-    # across the service link. The job container is ephemeral, so there is
-    # nothing left to reap.
-    TESTCONTAINERS_RYUK_DISABLED: "true"
-    # Without this, container.Host() resolves to something the job container
-    # cannot reach.
-    TESTCONTAINERS_HOST_OVERRIDE: "docker"
     # Turns a skipped container test into a failure, so this job cannot
     # quietly stop testing anything.
     AIOZ_REQUIRE_DOCKER: "1"
@@ -107,15 +105,4 @@ integration:
     paths:
       - .cache/
   script:
-    # The dind service can still be booting when this starts, and testcontainers
-    # does not treat an unanswered DOCKER_HOST as an error - it quietly falls
-    # back to a mounted /var/run/docker.sock (see configuredDaemon in the
-    # docker_test.go files). Wait for the service, and fail here if it never
-    # comes up. The usual reason it never does is a runner without
-    # `privileged = true`: dind then dies at "mount: permission denied".
-    - |
-      timeout 60 bash -c 'until (exec 3<>/dev/tcp/docker/2375) 2>/dev/null; do sleep 1; done' || {
-        echo "docker:dind never answered on docker:2375 - check the service log above; a runner without privileged = true makes dind exit at startup" >&2
-        exit 1
-      }
     - go test -race -timeout 20m ./redis/... ./rabbitmq/... ./postgres/...

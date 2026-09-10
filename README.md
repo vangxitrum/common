@@ -130,7 +130,8 @@ make test-integration  # the container tests, skipping turned off
 
 CI runs `lint` then `test` on merge requests and on the default branch; lint is
 blocking. A third `integration` stage runs the `redis`, `rabbitmq` and `postgres` container
-tests against real servers, on a docker-in-docker runner.
+tests against real servers, on the runner's own docker daemon through its
+mounted socket (the runner is not privileged, so docker-in-docker cannot start).
 
 The container tests are ordinary test files with no build tag, so they are
 always compiled and always linted; they skip when there is no docker daemon.

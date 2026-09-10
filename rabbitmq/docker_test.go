@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/stats/testcontext"
 )
 
 // The broker's own guest user only accepts loopback connections, and from
@@ -125,13 +128,46 @@ func containerOf(server *broker) testcontainers.Container {
 }
 
 func newBroker() (*broker, error) {
+	return newBrokerOn(freePort)
+}
+
+// newBrokerOn starts a broker on a host port from pick, and picks again when
+// docker reports that port taken.
+//
+// pick can only see this process's ports, and in CI the daemon is the runner's
+// own, shared with every other job on it - so a port free here can already be
+// bound on the daemon's host by someone else's container, and docker fails the
+// start. Another port is the whole fix, so it costs a retry, not the test.
+func newBrokerOn(pick func() (string, error)) (*broker, error) {
+	const attempts = 5
+
+	for attempt := 1; ; attempt++ {
+		hostPort, err := pick()
+		if err != nil {
+			return nil, err
+		}
+
+		server, err := startBrokerOn(hostPort)
+		if err == nil || attempt == attempts || !portTaken(err) {
+			return server, err
+		}
+	}
+}
+
+// portTaken reports a start that failed on the host port: "port is already
+// allocated" when another container holds it, "address already in use" when
+// something outside docker does.
+func portTaken(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "port is already allocated") ||
+		strings.Contains(msg, "address already in use")
+}
+
+// startBrokerOn runs one broker bound to hostPort. A container that fails is
+// removed here, since the caller only gets one back on success.
+func startBrokerOn(hostPort string) (*broker, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-
-	hostPort, err := freePort()
-	if err != nil {
-		return nil, err
-	}
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -147,6 +183,7 @@ func newBroker() (*broker, error) {
 		Started: true,
 	})
 	if err != nil {
+		_ = testcontainers.TerminateContainer(container)
 		return nil, err
 	}
 
@@ -159,6 +196,7 @@ func newBroker() (*broker, error) {
 	// something Wait waits for.
 	host, err := container.Host(ctx)
 	if err != nil {
+		_ = testcontainers.TerminateContainer(container)
 		return nil, err
 	}
 
@@ -210,10 +248,9 @@ func (b *broker) config(t *testing.T) Config {
 // listener and docker binding the port is a race in theory; in a test process
 // that is the only thing asking for ports, it does not happen.
 //
-// Under docker-in-docker this probes the wrong host - the port has to be free
-// on the daemon's host, not on this one - but a dind daemon starts empty, so a
-// port free here is free there too. A collision would fail the container start
-// with a clear message rather than hang.
+// The port has to be free on the docker daemon's host, and this only probes
+// this process's own. Where the two differ - a CI runner that shares its daemon
+// with other jobs - newBrokerOn retries past a port that turns out taken.
 func freePort() (string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -237,4 +274,32 @@ func (w *testWriter) Write(p []byte) (int, error) {
 	w.t.Helper()
 	w.t.Log(string(p))
 	return len(p), nil
+}
+
+// In CI the daemon is shared with other jobs, so a port freePort hands out can
+// already be bound on the daemon's host, and that has to cost a retry rather
+// than the test. The shared broker's port stands in for another job's
+// container: it is taken on the daemon's host, whichever host that is.
+func TestABrokerStartsPastATakenPort(t *testing.T) {
+	t.Parallel()
+
+	ctx := testcontext.New(t)
+
+	_, takenPort, err := net.SplitHostPort(sharedBroker(t).address)
+	require.NoError(t, err)
+
+	var picks int
+	server, err := newBrokerOn(func() (string, error) {
+		picks++
+		if picks == 1 {
+			return takenPort, nil
+		}
+		return freePort()
+	})
+	testcontainers.CleanupContainer(t, containerOf(server))
+	require.NoError(t, err)
+	require.Equal(t, 2, picks, "the taken port was not retried past")
+
+	conn := run(t, ctx, server.config(t))
+	require.True(t, conn.Connected())
 }
