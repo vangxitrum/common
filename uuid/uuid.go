@@ -200,9 +200,19 @@ func (id *UUID) UnmarshalJSON(b []byte) error {
 	return id.UnmarshalText([]byte(s))
 }
 
-// Value implements driver.Valuer, writing the 16 raw bytes. Postgres stores a
-// uuid column as 16 bytes, so this avoids a hex round trip on every row.
-func (id UUID) Value() (driver.Value, error) { return id.Bytes(), nil }
+// Value implements driver.Valuer, writing the canonical dashed string.
+//
+// The raw 16 bytes would be the cheaper thing to send to a uuid column - that
+// is what the column holds, and it saves the driver a parse per row - but it is
+// wrong everywhere else. Sent to a text or varchar column, those bytes are not
+// valid UTF-8 and Postgres rejects the whole statement:
+//
+//	ERROR: invalid byte sequence for encoding "UTF8": 0xa0 (SQLSTATE 22021)
+//
+// and lib/pq will not send a []byte to a uuid column at all. The string form
+// works for every column type and every driver, and produces the identical
+// value in a uuid column. A parse per row is the cheaper mistake.
+func (id UUID) Value() (driver.Value, error) { return id.String(), nil }
 
 // Scan implements sql.Scanner, accepting the raw bytes a uuid column returns
 // and the string form a text or varchar column returns.

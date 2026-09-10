@@ -275,6 +275,28 @@ func DevVersion(commitHash string, timestamp time.Time) SemVer {
 	return derived
 }
 
+// UserAgent renders the stamp as a User-Agent product token: "name/1.2.3", or
+// a bare "name" for a build with no version.
+//
+// The commit hash and the modified flag are deliberately left out. A
+// User-Agent is sent to third parties, so a dirty-tree marker is internal
+// detail leaking outward, and a token that changes on every commit fragments
+// whatever the remote counts by user-agent into noise. The version is the part
+// that identifies a release worth talking about.
+//
+// An empty name yields an empty string rather than a bare version, because a
+// version with no product name is not a legal product token.
+func (v Info) UserAgent(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if v.Version.IsZero() {
+		return name
+	}
+	return name + "/" + strings.TrimPrefix(v.Version.String(), "v")
+}
+
 // IsDev reports whether s was derived by [DevVersion] rather than read from a
 // tag.
 func (s SemVer) IsDev() bool {

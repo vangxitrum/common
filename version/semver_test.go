@@ -179,3 +179,51 @@ func TestGitDescribeOutputSortsBelowItsOwnTag(t *testing.T) {
 		"three commits past v2.4.1 reads as a prerelease of it; do not feed "+
 			"git describe output to NewSemVer as a build version")
 }
+
+// A SemVer could not be stored before it had these: database/sql has no
+// converter for a struct, and the embedded blang Version supplies none either.
+func TestValueAndScanRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	v, err := version.NewSemVer("v1.2.3")
+	require.NoError(t, err)
+
+	value, err := v.Value()
+	require.NoError(t, err)
+	require.Equal(t, "v1.2.3", value)
+
+	for name, stored := range map[string]any{
+		"a text column":         "v1.2.3",
+		"a bytes driver":        []byte("v1.2.3"),
+		"a row without the v":   "1.2.3",
+		"a row missing a piece": "1.2",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var got version.SemVer
+			require.NoError(t, got.Scan(stored))
+			require.Equal(t, uint64(1), got.Major)
+			require.Equal(t, uint64(2), got.Minor)
+		})
+	}
+}
+
+// "No version" and "version zero" are different facts. A column that stored the
+// zero value as v0.0.0 could not tell them apart.
+func TestTheZeroVersionIsNull(t *testing.T) {
+	t.Parallel()
+
+	value, err := version.SemVer{}.Value()
+	require.NoError(t, err)
+	require.Nil(t, value, "the zero SemVer must store as NULL")
+
+	for _, stored := range []any{nil, "", "   "} {
+		var got version.SemVer
+		require.NoError(t, got.Scan(stored))
+		require.True(t, got.IsZero(), "Scan(%v) must give the zero value", stored)
+	}
+
+	var bad version.SemVer
+	require.Error(t, bad.Scan(42))
+}

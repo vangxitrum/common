@@ -169,11 +169,19 @@ func TestScanAcceptsWhatDriversReturn(t *testing.T) {
 	require.Error(t, bad.Scan(42))
 }
 
-func TestValueIsRawBytes(t *testing.T) {
+// This asserted the raw bytes until a UUID written to a text column took the
+// whole statement down with `invalid byte sequence for encoding "UTF8"`.
+// Sixteen arbitrary bytes are not a string, and Value has no idea which kind of
+// column it is being sent to.
+func TestValueIsTheCanonicalString(t *testing.T) {
 	id := uuid.Must()
 	value, err := id.Value()
 	require.NoError(t, err)
-	require.Equal(t, id.Bytes(), value)
+	require.Equal(t, id.String(), value)
+
+	var back uuid.UUID
+	require.NoError(t, back.Scan(value))
+	require.Equal(t, id, back, "Value and Scan must round trip")
 }
 
 func TestProtoMethods(t *testing.T) {
@@ -215,4 +223,34 @@ func TestListSetAndString(t *testing.T) {
 	require.Empty(t, list)
 
 	require.Error(t, list.Set("not-a-uuid"))
+}
+
+// Scan still accepts the raw bytes a uuid column may return: a driver that
+// hands back sixteen bytes has not stopped existing just because Value no
+// longer sends them.
+func TestScanAcceptsBytesAndStrings(t *testing.T) {
+	t.Parallel()
+
+	id, err := uuid.FromString("0199322d-4c0a-7000-8000-000000000001")
+	require.NoError(t, err)
+
+	for name, value := range map[string]any{
+		"the raw sixteen bytes": id.Bytes(),
+		"the dashed string":     id.String(),
+		"the dashed bytes":      []byte(id.String()),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var got uuid.UUID
+			require.NoError(t, got.Scan(value))
+			require.Equal(t, id, got)
+		})
+	}
+
+	var nilled uuid.UUID
+	require.NoError(t, nilled.Scan(nil))
+	require.True(t, nilled.IsNil())
+
+	require.Error(t, nilled.Scan(42))
 }

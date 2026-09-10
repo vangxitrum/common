@@ -205,3 +205,16 @@ form described above.
 `-X` must target a plain `string` variable. Aimed at a struct field such as
 `Build.Version` it names a symbol that does not exist and the linker **silently
 drops it**, leaving no error and no value.
+
+## Storage
+
+`SemVer` implements `driver.Valuer` and `sql.Scanner`, writing the rendered form
+with its leading `v`. Without them it could not be a column: `database/sql` has
+no converter for a struct, and the embedded blang `Version` supplies none.
+
+Scanning is as tolerant as `NewSemVer`, so a row written by an older release
+that omitted the `v` or the patch component still reads.
+
+The zero value stores as `NULL` rather than as `v0.0.0`, for the same reason
+`String` renders it empty: "no version" and "version zero" are different facts,
+and a column that cannot tell them apart has lost one.

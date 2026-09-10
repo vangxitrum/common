@@ -9,8 +9,16 @@
 package period
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"time"
+)
+
+// A Period crosses a database boundary as its YYYY-MM string.
+var (
+	_ driver.Valuer = Period{}
+	_ sql.Scanner   = (*Period)(nil)
 )
 
 // Period represents a monthly payment period.
@@ -77,5 +85,47 @@ func FromTime(t time.Time) Period {
 	return Period{
 		Year:  year,
 		Month: month,
+	}
+}
+
+// Value implements driver.Valuer, writing the YYYY-MM form.
+//
+// Without it a Period cannot be stored at all: database/sql refuses a struct it
+// has no converter for, and the failure arrives at the first query rather than
+// at compile time. A zero Period stores as NULL, because "no period" is a real
+// state here and "0000-00" is not a month.
+func (p Period) Value() (driver.Value, error) {
+	if p.IsZero() {
+		return nil, nil
+	}
+	return p.String(), nil
+}
+
+// Scan implements sql.Scanner, reading the YYYY-MM form back.
+//
+// It accepts the string a text column returns and the []byte some drivers
+// return for the same column, and reads NULL back as the zero Period, which is
+// what Value wrote.
+func (p *Period) Scan(value any) error {
+	switch v := value.(type) {
+	case nil:
+		*p = Period{}
+		return nil
+	case string:
+		parsed, err := FromString(v)
+		if err != nil {
+			return err
+		}
+		*p = parsed
+		return nil
+	case []byte:
+		parsed, err := FromString(string(v))
+		if err != nil {
+			return err
+		}
+		*p = parsed
+		return nil
+	default:
+		return fmt.Errorf("cannot scan %T into period.Period", value)
 	}
 }

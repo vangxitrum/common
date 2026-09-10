@@ -147,3 +147,43 @@ func swapLinkVars(
 		buildTimestamp, buildRelease = oldTimestamp, oldRelease
 	}
 }
+
+// A User-Agent goes to third parties, so what it leaves out matters as much as
+// what it carries: no commit hash, no dirty-tree marker.
+func TestUserAgent(t *testing.T) {
+	t.Parallel()
+
+	tagged, err := NewSemVer("v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		info    Info
+		product string
+		want    string
+	}{
+		"a tagged build is name and version": {
+			info:    Info{Version: tagged, CommitHash: "abc1234def", Modified: true},
+			product: "billing",
+			want:    "billing/1.2.3",
+		},
+		"a build with no version is the bare name": {
+			info:    Info{CommitHash: "abc1234def"},
+			product: "billing",
+			want:    "billing",
+		},
+		"no product name is no token at all": {
+			info:    Info{Version: tagged},
+			product: "  ",
+			want:    "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.info.UserAgent(tc.product); got != tc.want {
+				t.Fatalf("UserAgent = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

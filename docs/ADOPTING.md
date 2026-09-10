@@ -42,6 +42,45 @@ func run(ctx context.Context, cmd *cobra.Command) error {
         Close: debugServer.Close,
     })
 
+    // A connection pool: Close alone, no Run. Open has already dialed and
+    // pinged, so a bad address failed above rather than on the first request.
+    cache, err := redis.Open(ctx, log, cfg.Redis)
+    if err != nil {
+        return err
+    }
+    monkit.Default.ScopeNamed("redis").Chain(cache)
+    group.Add(lifecycle.Item{Name: "redis", Close: cache.Close})
+
+    // The same shape, and the same reason: pgxpool.New returns a pool that has
+    // not connected to anything, so without this ping a wrong password starts
+    // cleanly and fails on the first query.
+    db, err := postgres.Open(ctx, log, cfg.Postgres)
+    if err != nil {
+        return err
+    }
+    monkit.Default.ScopeNamed("postgres").Chain(db)
+    group.Add(lifecycle.Item{Name: "postgres", Close: db.Close})
+
+    // A supervised connection: Run reconnects for as long as it is running.
+    // Register it before anything built on it, because the group closes in
+    // reverse and the connection has to close last.
+    broker := rabbitmq.New(log, cfg.RabbitMQ)
+    monkit.Default.ScopeNamed("rabbitmq").Chain(broker)
+    group.Add(lifecycle.Item{Name: "rabbitmq", Run: broker.Run, Close: broker.Close})
+
+    // One outbound client per dependency: the name is what its metrics are
+    // tagged by, and each dependency gets its own pool and its own timeout.
+    // There is no Chain call here - an http.Transport exports no pool gauge to
+    // poll, so every number this one has is pushed as it happens.
+    billing, err := httpclient.New(log, cfg.Billing)
+    if err != nil {
+        return err
+    }
+    group.Add(lifecycle.Item{Name: "billing", Close: func() error {
+        billing.CloseIdleConnections()
+        return nil
+    }})
+
     runners, ctx := errgroup.WithContext(ctx)
     group.Run(ctx, runners)
     return runners.Wait()
@@ -51,11 +90,39 @@ func run(ctx context.Context, cmd *cobra.Command) error {
 `Group.Run` takes an `errgroup.Group` and starts each item in it, so the
 caller owns the wait and the first real failure cancels the rest. `Item.Run`
 and `Item.Close` are both optional: a component that only needs stopping, such
-as a cache or a connection pool, supplies `Close` alone.
+as a cache or a connection pool, supplies `Close` alone - `redis.Client` and
+`postgres.DB` above are exactly that shape, and `rabbitmq.Conn` is the other one, a component whose
+`Run` supervises something for the life of the process.
 
 Steps 1 and 2 are ordered for a reason: a configuration error has to be
 reportable, and `logging.Bootstrap` exists precisely so there is a logger
 before the configured one is built.
+
+## Retries
+
+`retry` is the backoff every service was writing by hand, and none of those
+loops waited a random amount of time. When a dependency restarts, every instance
+that was talking to it fails in the same instant and reconnects in the same
+instant; full jitter is what breaks that up. Pass a classifier so a bug is not
+retried four times:
+
+```go
+backoff := retry.New(cfg.Publish.Retry, retry.WithRetryable(isTransient))
+err := backoff.Do(ctx, func(ctx context.Context) error { return publishOnce(ctx) })
+```
+
+HTTP retries are **off by default** and opt in at the call site, because a
+client that retries by default triples the load on a dependency that is already
+failing, and a POST that timed out may well have succeeded:
+
+```go
+resp, err := billing.Do(req.WithContext(httpclient.WithRetry(ctx)))
+```
+
+One thing to know before using it: retry is a `RoundTripper`, so it sits inside
+`Client.Timeout` and inside the context deadline and every attempt shares one
+budget. A retrying call site has to set a deadline that covers all the attempts,
+not one.
 
 ## Configuration
 
@@ -82,6 +149,11 @@ one.
 Then call `CheckSecrets` at startup, or the rule only covers half the problem:
 without a shipped placeholder *and* without a startup check, removing the
 placeholder silently yields an empty key.
+
+Two flags in `httpclient` are `hidden:"true"` - `tls-skip-verify` and
+`allow-downgrade` - so neither appears in help or in a generated config file.
+Both disable a protection, and a setting that disables a protection should have
+to be typed deliberately rather than found in a file.
 
 For a local convenience value, pair a `devDefault` with an explicitly empty
 `releaseDefault`:
