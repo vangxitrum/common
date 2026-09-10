@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.3.0 (unreleased)
+## v0.3.0 (2026-09-10)
+
+Release note: [`.gitlab/releases/v0.3.0.md`](.gitlab/releases/v0.3.0.md).
 
 Twelve utility packages imported from `depin`, eight new packages, and one
 security rule added to `config`. The new ones cover the three dependencies every
