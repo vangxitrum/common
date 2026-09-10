@@ -247,6 +247,11 @@ func retryableError(err error) bool {
 		return false
 	}
 
+	if errors.Is(err, ErrBlockedAddress) {
+		// Refused by address, and it will be the same address next time.
+		return false
+	}
+
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		// A bad scheme, a missing host, or our own redirect policy refusing.

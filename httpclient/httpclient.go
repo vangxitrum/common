@@ -78,6 +78,9 @@ type Config struct {
 
 	MaxResponseSize memory.Size `help:"cap on a response body read through this client; 0 disables the cap" default:"32MiB"`
 
+	PrivateNetworks string   `help:"connections to loopback, private, link-local and other internal addresses: allow or block; empty lets the constructor choose - New allows, NewOneShot blocks" default:""`
+	AllowedNetworks []string `help:"address prefixes exempt from blocking, such as 10.20.0.0/16"                                                                                              default:""`
+
 	UserAgent string `help:"user-agent header; empty derives one from the binary name and the build stamp" default:""`
 
 	Retry              bool          `help:"retry idempotent requests on a connection error or a retryable status; off because a client that retries by default triples the load on a dependency that is already failing" default:"false"`
@@ -116,6 +119,9 @@ func (config Config) Validate() error {
 	if config.MaxResponseSize < 0 {
 		return Error.Errorf("max-response-size must not be negative")
 	}
+	if _, err := config.guard(false); err != nil {
+		return err
+	}
 	if config.RetryWaitMin > config.RetryWaitMax {
 		return Error.Errorf(
 			"retry-wait-min %s is longer than retry-wait-max %s",
@@ -152,6 +158,12 @@ func New(log *slog.Logger, config Config) (*http.Client, error) {
 // and leaks file descriptors until they time out. Reach for this only when the
 // address is genuinely one-off; a client per dependency, built with New, is
 // what almost every call site wants.
+//
+// It also refuses to connect to internal addresses - loopback, private
+// networks, link-local and the cloud metadata endpoint among them - because an
+// address you will not see again usually came from someone else, and that is
+// how server-side request forgery reaches inside. PrivateNetworks and
+// AllowedNetworks change that; a refusal wraps ErrBlockedAddress.
 func NewOneShot(log *slog.Logger, config Config) (*http.Client, error) {
 	transport, err := OneShotTransport(config)
 	if err != nil {
@@ -180,10 +192,7 @@ func NewWith(
 		return nil, err
 	}
 
-	name := config.Name
-	if name == "" {
-		name = "http"
-	}
+	name := config.clientName()
 	nameTag := monkit.NewSeriesTag("name", name)
 	config.Name = name
 
@@ -216,6 +225,14 @@ func NewWith(
 		Timeout:       config.Timeout,
 		CheckRedirect: config.checkRedirect(),
 	}, nil
+}
+
+// clientName is the name this client's series are tagged with.
+func (config Config) clientName() string {
+	if config.Name == "" {
+		return "http"
+	}
+	return config.Name
 }
 
 // userAgent is what this client identifies itself as.

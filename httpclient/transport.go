@@ -14,7 +14,7 @@ import (
 // adjust one field rather than abandoning the Config entirely. The result is
 // what NewWith takes.
 func Transport(config Config) (*http.Transport, error) {
-	transport, err := baseTransport(config)
+	transport, err := baseTransport(config, false)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func Transport(config Config) (*http.Transport, error) {
 // descriptors, because every host it ever spoke to keeps idle connections
 // until they time out. This one holds nothing.
 func OneShotTransport(config Config) (*http.Transport, error) {
-	transport, err := baseTransport(config)
+	transport, err := baseTransport(config, true)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +51,15 @@ func OneShotTransport(config Config) (*http.Transport, error) {
 	return transport, nil
 }
 
-func baseTransport(config Config) (*http.Transport, error) {
+// baseTransport is what both profiles share. blockByDefault is the profile's
+// own answer to an empty PrivateNetworks.
+func baseTransport(config Config, blockByDefault bool) (*http.Transport, error) {
 	tlsConfig, err := config.tlsConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	guard, err := config.guard(blockByDefault)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +69,16 @@ func baseTransport(config Config) (*http.Transport, error) {
 		KeepAlive: config.KeepAlive,
 	}
 
+	proxy := http.ProxyFromEnvironment
+	if guard != nil {
+		dialer.Control = guard.control
+		// Through a proxy the guard would only ever see the proxy's address,
+		// and the proxy would connect wherever the URL says.
+		proxy = nil
+	}
+
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxy,
 		DialContext:           dialer.DialContext,
 		TLSClientConfig:       tlsConfig,
 		TLSHandshakeTimeout:   config.TLSHandshakeTimeout,
