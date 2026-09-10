@@ -7,7 +7,7 @@
 GOLANGCI_LINT_VERSION := v2.11.4
 GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
 
-.PHONY: lint lint-fix fmt test
+.PHONY: lint lint-fix fmt test test-integration
 
 $(GOLANGCI_LINT):
 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
@@ -24,3 +24,8 @@ fmt:
 
 test:
 	go test ./...
+
+# The container tests, with skipping turned off so a missing docker daemon is
+# a failure rather than a green run that tested nothing.
+test-integration:
+	AIOZ_REQUIRE_DOCKER=1 go test -race -timeout 20m ./redis/... ./rabbitmq/... ./postgres/...

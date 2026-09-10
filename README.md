@@ -23,11 +23,16 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/uuid`](uuid/README.md) | `uuid` | Identifiers anything can generate without coordinating - no database round trip, no collisions across machines. A `[16]byte`, so it is comparable and works as a map key; version 7, so ids sort by creation time. |
 | [`aioz-common/currency`](currency/README.md) | `currency` | Money as a whole number of tiny units, so it never touches a float. `USD` and `AIOZ` count base units at 18 decimals and cannot be added to each other, because the currency is part of the type; `Decimal` is the rate they are computed from. |
 | [`aioz-common/cycle`](cycle/README.md) | `cycle` | Runs a function on an interval, with `Trigger`/`TriggerWait` so a background chore is testable without sleeping. |
+| [`aioz-common/retry`](retry/README.md) | `retry` | Exponential backoff with full jitter, so a dependency that restarts is not met by every instance at once. A classifier decides what is worth retrying, the context decides when to stop, and the clock comes from `time2`, so a test never sleeps. |
 | [`aioz-common/time2`](time2/README.md) | `time2` | A `Clock` carried on the context, so code under test advances time instead of spending it; `Machine` drives timers and tickers deterministically. |
 | [`aioz-common/memory`](memory/README.md) | `memory` | A byte count that carries its unit. Parses and prints both the base-2 and base-10 families, binds to a flag, and survives YAML and JSON as a string rather than an unlabeled number. |
 | [`aioz-common/date`](date/README.md) | `date` | Month and day boundaries in UTC, and the arithmetic between them, so every billing and reporting query agrees on where a month starts. |
 | [`aioz-common/period`](period/README.md) | `period` | A calendar month as a comparable value, with the half-open time range it stands for. The `YYYY-MM` format is validated once, at the edge. |
 | [`aioz-common/lrucache`](lrucache/README.md) | `lrucache` | An LRU with a TTL that fills a miss once per key however many callers missed together, so an expiring hot key does not stampede the backend. |
+| [`aioz-common/redis`](redis/README.md) | `redis` | A configured, observable go-redis client: it dials and pings at startup so a bad address fails next to its configuration, carries timeouts, pool limits and a metrics hook that knows a miss from an error, and embeds the library's own client so no command is wrapped. |
+| [`aioz-common/rabbitmq`](rabbitmq/README.md) | `rabbitmq` | The AMQP client: a supervised connection with exponential backoff, a topology re-declared on every reconnect, a publisher with per-publish confirms, and a consumer with a bounded worker pool, a dead-letter policy and a graceful drain. |
+| [`aioz-common/postgres`](postgres/README.md) | `postgres` | A configured, observable pgx pool: it pings at startup because `pgxpool.New` returns a pool that has not connected to anything, sends session settings once per connection rather than per query, measures how long callers wait for a connection, and embeds `*pgxpool.Pool` so no query method is wrapped. |
+| [`aioz-common/httpclient`](httpclient/README.md) | `httpclient` | The outbound `*http.Client` with the timeouts, connection pool, redirect policy and metrics `http.DefaultClient` has none of. Pure `net/http`: no server, no router, no framework. Retry is opt-in per call site. |
 | [`aioz-common/errs2`](errs2/README.md) | `errs2` | Tells a cancellation apart from a fault, and a `Group` that returns every goroutine's error rather than only the first. |
 | [`aioz-common/signal`](signal/README.md) | `signal` | A one-shot error others can wait on or select on, and a `chan struct{}` that is not allocated until something uses it. |
 | [`aioz-common/context2`](context2/README.md) | `context2` | The three context shapes the standard library lacks: work that outlives its request, a deadline set after the fact, and a cancellation that carries a reason. |
@@ -57,6 +62,7 @@ aioz-common/
 ├── cycle/            # interval runner
 ├── date/             # UTC month and day boundaries
 ├── errs2/            # cancellation, and error groups
+├── httpclient/       # the outbound HTTP client
 ├── leak/             # resource-leak tracking
 ├── lifecycle/        # component start/stop
 ├── logger/           # the slog.Handler
@@ -65,7 +71,11 @@ aioz-common/
 ├── lrucache/         # LRU + TTL + single-flight fill
 ├── memory/           # byte counts with units
 ├── period/           # a calendar month as a value
+├── postgres/         # configured, observable pgx pool
+├── rabbitmq/         # AMQP connection, topology, publisher, consumer
 ├── readcloser/       # io.ReadCloser combinators
+├── redis/            # configured, observable go-redis client
+├── retry/            # exponential backoff with jitter
 ├── secret/           # bearer secrets and their hashes
 ├── signal/           # one-shot errors, lazy channels
 ├── slices2/          # Map and its fallible forms
@@ -83,6 +93,25 @@ aioz-common/
 both declare `Config`, `FileConfig` and `New`, so merging them is an API
 rewrite, not a move. `logger` is the handler; `logging` is what configures it.
 
+`redis`, `rabbitmq` and `postgres` are the packages here that wrap someone else's
+client, and they stop at different lines, on purpose. go-redis already handles
+reconnection and pooling, so `redis` adds construction, a startup ping, metrics
+and `Close`, hands back the library's own type, and wraps not one command.
+`amqp091` handles nothing above the wire, so `rabbitmq` owns the connection
+supervisor, topology, publisher and consumer that seven services had each
+written for themselves. Neither defines a Cache or Queue interface: the moment
+there is one, every feature the underlying library grows has to be re-exported
+through it, and services start choosing between the abstraction and the thing
+it abstracts. `postgres` stops in the same place `redis` does, for a different
+failure: go-redis dials lazily and fails on the first command, while `pgxpool`
+never dials at all and fails on the first acquire.
+
+`httpclient` is a client and nothing else. There is no server, router or
+middleware package here and there will not be one: the services do not share an
+HTTP framework, so anything tied to one is unusable by half of them. What they
+do share is the outbound side, because `*http.Client` and `http.RoundTripper`
+are stdlib types every framework and every vendored SDK already accepts.
+
 `testcontext` lives under `stats/` because that is where it was authored (in
 the former `aioz-stats` repository) and moving it would break import paths for
 no functional gain. `version` did move out, once it grew version comparison and
@@ -95,11 +124,18 @@ remains as a deprecated alias so nothing breaks.
 make lint      # golangci-lint, same version pin as CI
 make lint-fix
 make fmt
-make test
+make test              # unit tests, no docker
+make test-integration  # the container tests, skipping turned off
 ```
 
 CI runs `lint` then `test` on merge requests and on the default branch; lint is
-blocking.
+blocking. A third `integration` stage runs the `redis`, `rabbitmq` and `postgres` container
+tests against real servers, on a docker-in-docker runner.
+
+The container tests are ordinary test files with no build tag, so they are
+always compiled and always linted; they skip when there is no docker daemon.
+`AIOZ_REQUIRE_DOCKER=1` turns that skip into a failure, which is how CI makes
+sure the job cannot quietly stop testing anything.
 
 ## History
 

@@ -7,6 +7,7 @@
 stages:
   - lint
   - test
+  - integration
 
 variables:
   GOLANGCI_LINT_VERSION: "v2.11.4"
@@ -68,3 +69,42 @@ test:
       - .cache/
   script:
     - go test ./...
+
+# The container tests: everything the two client packages exist for - a
+# reconnect after the broker really goes away, a redelivery, a drain - can only
+# be exercised against a real server, so this job runs one. It is a separate
+# stage because it needs a privileged runner for docker-in-docker, which the
+# lint and test jobs must not wait on.
+integration:
+  stage: integration
+  image: ${GO_IMAGE}
+  services:
+    - name: docker:27-dind
+      alias: docker
+      command: ["--tls=false"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+    # Ryuk reaps containers by binding back to the daemon, which is awkward
+    # across the service link. The job container is ephemeral, so there is
+    # nothing left to reap.
+    TESTCONTAINERS_RYUK_DISABLED: "true"
+    # Without this, container.Host() resolves to something the job container
+    # cannot reach.
+    TESTCONTAINERS_HOST_OVERRIDE: "docker"
+    # Turns a skipped container test into a failure, so this job cannot
+    # quietly stop testing anything.
+    AIOZ_REQUIRE_DOCKER: "1"
+    GOMODCACHE: "${CI_PROJECT_DIR}/.cache/go-mod"
+    GOCACHE: "${CI_PROJECT_DIR}/.cache/go-build"
+    CGO_ENABLED: "1"
+  cache:
+    policy: pull-push
+    key: "go-integration-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cache/
+  script:
+    - go test -race -timeout 20m ./redis/... ./rabbitmq/... ./postgres/...
