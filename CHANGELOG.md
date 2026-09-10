@@ -105,6 +105,25 @@ the SQLSTATE. `DB` embeds `*pgxpool.Pool`, so no query method is wrapped and
 `stdlib.OpenDBFromPool` is there for anyone who wants `database/sql`. Migrations
 are deliberately out of scope. See [`postgres/README.md`](postgres/README.md).
 
+**`uuid.UUID.Value` now writes the canonical string, not the raw bytes.** The
+bytes were cheaper for a `uuid` column, which is what the column holds, and
+wrong for every other one: sixteen arbitrary bytes are not valid UTF-8, so a
+`text` or `varchar` column rejected the whole statement with `invalid byte
+sequence for encoding "UTF8"`, and `lib/pq` refuses a `[]byte` for a `uuid`
+column outright. `Value` cannot know which kind of column it is being sent to,
+so it now sends the form that works for all of them. `Scan` still accepts both.
+This changes what new rows contain in a `bytea` column, which nothing here
+writes; a `uuid` column is unaffected, since both forms produce the same value.
+
+**`period.Period` and `version.SemVer` can be stored.** Both are structs, and
+`database/sql` has no converter for a struct, so both were unusable as columns -
+a failure that arrived at the first query rather than at compile time. They now
+implement `driver.Valuer` and `sql.Scanner` over their string forms, and their
+zero values store as `NULL`: "no period" and "no version" are real states, and a
+column that wrote them as `0000-00` or `v0.0.0` could not tell them from real
+ones. `memory.Size` needed nothing - its underlying type is `int64` - and there
+is now a test against a real column that says so.
+
 **`version.Info.UserAgent`** - the build stamp as a User-Agent product token, so
 every outbound integration identifies itself the same way. The commit hash is
 deliberately not in it: a per-commit User-Agent fragments whatever the remote

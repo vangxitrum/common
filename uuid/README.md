@@ -78,9 +78,21 @@ id, err := uuid.FromBytes(raw)                                    // copies raw
 
 ## Storage and encoding
 
-`Value` writes the 16 raw bytes, which is what a Postgres `uuid` column holds -
-no hex round trip per row. `Scan` accepts raw bytes, the string form a `text`
-column returns, and `nil`.
+`Value` writes the canonical dashed string. `Scan` accepts that, the raw 16
+bytes a `uuid` column may return, and `nil`.
+
+It used to write the raw bytes - cheaper for a `uuid` column, which is what the
+column holds - and that was wrong for every other column. Sixteen arbitrary
+bytes are not valid UTF-8, so a `text` or `varchar` column rejects the whole
+statement:
+
+```
+ERROR: invalid byte sequence for encoding "UTF8": 0xa0 (SQLSTATE 22021)
+```
+
+and `lib/pq` will not send a `[]byte` to a `uuid` column at all. `Value` has no
+idea which kind of column it is being sent to, so it sends the form that works
+for all of them. A parse per row is the cheaper mistake.
 
 `MarshalText`/`UnmarshalText` are implemented, which is what lets a UUID be a
 JSON map key and a URL path parameter. JSON `null` decodes to `Nil` rather than

@@ -1,10 +1,18 @@
 package version
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"strings"
 
 	"github.com/blang/semver/v4"
+)
+
+// A SemVer crosses a database boundary as its rendered string.
+var (
+	_ driver.Valuer = SemVer{}
+	_ sql.Scanner   = (*SemVer)(nil)
 )
 
 // SemVer is a semantic version that can be compared.
@@ -88,6 +96,53 @@ func (s *SemVer) UnmarshalJSON(b []byte) error {
 	}
 
 	parsed, err := NewSemVer(str)
+	if err != nil {
+		return err
+	}
+	*s = parsed
+	return nil
+}
+
+// Value implements driver.Valuer, writing the rendered form with its leading
+// "v".
+//
+// Without it a SemVer cannot be stored: database/sql has no converter for a
+// struct, and the embedded blang Version would not have supplied one either.
+// The zero value stores as NULL rather than as "v0.0.0", for the same reason
+// String renders it empty - "no version" and "version zero" are different
+// facts, and a column that cannot tell them apart loses one.
+func (s SemVer) Value() (driver.Value, error) {
+	if s.IsZero() {
+		return nil, nil
+	}
+	return s.String(), nil
+}
+
+// Scan implements sql.Scanner, parsing the stored form back.
+//
+// Parsing is NewSemVer's, so it is as tolerant reading a column as it is
+// reading a Makefile variable: a row written by an older release that omitted
+// the "v", or the patch component, still reads.
+func (s *SemVer) Scan(value any) error {
+	switch v := value.(type) {
+	case nil:
+		*s = SemVer{}
+		return nil
+	case string:
+		return s.scanString(v)
+	case []byte:
+		return s.scanString(string(v))
+	default:
+		return Error.Errorf("cannot scan %T into SemVer", value)
+	}
+}
+
+func (s *SemVer) scanString(v string) error {
+	if strings.TrimSpace(v) == "" {
+		*s = SemVer{}
+		return nil
+	}
+	parsed, err := NewSemVer(v)
 	if err != nil {
 		return err
 	}

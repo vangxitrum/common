@@ -52,3 +52,13 @@ value.
 - `String()` renders `YYYY-MM`; `MarshalCSV`/`UnmarshalCSV` carry it through a
   report.
 - `IsZero()` reports whether this is the zero value.
+
+## Storage
+
+`Value` writes the `YYYY-MM` string and `Scan` reads it back, so a `Period` can
+be a column. Without them it could not be stored at all: `database/sql` has no
+converter for a struct, and the failure arrives at the first query rather than
+at compile time.
+
+The zero `Period` stores as `NULL`, not as `"0000-00"`. "No period" is a real
+state - there is nothing outstanding to close - and `0000-00` is not a month.
