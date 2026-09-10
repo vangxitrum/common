@@ -107,4 +107,10 @@ integration:
     paths:
       - .cache/
   script:
+    # The dind service can still be booting when this starts, and testcontainers
+    # does not treat an unanswered DOCKER_HOST as an error - it quietly falls
+    # back to a mounted /var/run/docker.sock (see configuredDaemon in the
+    # docker_test.go files). Wait for the service, and fail here if it never
+    # comes up.
+    - timeout 60 bash -c 'until (exec 3<>/dev/tcp/docker/2375) 2>/dev/null; do sleep 1; done'
     - go test -race -timeout 20m ./redis/... ./rabbitmq/... ./postgres/...

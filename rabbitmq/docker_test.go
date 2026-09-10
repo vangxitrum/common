@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -41,6 +42,9 @@ func requireDocker(t *testing.T) {
 		err = provider.Health(context.Background())
 	}
 	if err == nil {
+		err = configuredDaemon(provider)
+	}
+	if err == nil {
 		return
 	}
 
@@ -48,6 +52,24 @@ func requireDocker(t *testing.T) {
 		t.Fatalf("AIOZ_REQUIRE_DOCKER is set but no docker daemon is reachable: %v", err)
 	}
 	t.Skipf("no docker daemon; set AIOZ_REQUIRE_DOCKER to make this a failure: %v", err)
+}
+
+// configuredDaemon fails when DOCKER_HOST names a daemon other than the one
+// testcontainers ended up on.
+//
+// A DOCKER_HOST that does not answer is not an error to testcontainers: it
+// falls back to /var/run/docker.sock if one exists, and keeps that choice for
+// the rest of the process. On a CI runner that mounts the host's socket beside
+// a docker-in-docker service, every container then starts on the runner's
+// daemon while TESTCONTAINERS_HOST_OVERRIDE sends connections to the dind one,
+// and each test spends its whole startup timeout on a refused port - reported
+// as a wait-strategy timeout, nowhere near the cause.
+func configuredDaemon(provider *testcontainers.DockerProvider) error {
+	want := os.Getenv("DOCKER_HOST")
+	if got := provider.Client().DaemonHost(); want != "" && got != want {
+		return fmt.Errorf("DOCKER_HOST is %s, but it did not answer and testcontainers fell back to %s", want, got)
+	}
+	return nil
 }
 
 // sharedBroker returns one broker for the whole package.
