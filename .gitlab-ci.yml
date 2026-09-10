@@ -111,6 +111,11 @@ integration:
     # does not treat an unanswered DOCKER_HOST as an error - it quietly falls
     # back to a mounted /var/run/docker.sock (see configuredDaemon in the
     # docker_test.go files). Wait for the service, and fail here if it never
-    # comes up.
-    - timeout 60 bash -c 'until (exec 3<>/dev/tcp/docker/2375) 2>/dev/null; do sleep 1; done'
+    # comes up. The usual reason it never does is a runner without
+    # `privileged = true`: dind then dies at "mount: permission denied".
+    - |
+      timeout 60 bash -c 'until (exec 3<>/dev/tcp/docker/2375) 2>/dev/null; do sleep 1; done' || {
+        echo "docker:dind never answered on docker:2375 - check the service log above; a runner without privileged = true makes dind exit at startup" >&2
+        exit 1
+      }
     - go test -race -timeout 20m ./redis/... ./rabbitmq/... ./postgres/...
