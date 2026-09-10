@@ -128,7 +128,19 @@ func newBroker() (*broker, error) {
 		return nil, err
 	}
 
-	return &broker{container: container, address: "127.0.0.1:" + hostPort}, nil
+	// The host comes from the container rather than being assumed to be
+	// localhost. Under docker-in-docker the published port lives on the docker
+	// daemon's host, not on this process's loopback, and Host honors
+	// DOCKER_HOST and TESTCONTAINERS_HOST_OVERRIDE. Hardcoding 127.0.0.1 made
+	// every test in this package block in Conn.Wait until the test binary
+	// timed out, because a broker that cannot be reached is - correctly -
+	// something Wait waits for.
+	host, err := container.Host(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &broker{container: container, address: net.JoinHostPort(host, hostPort)}, nil
 }
 
 // stop takes the broker away, the way a broker restart or a network partition
@@ -175,6 +187,11 @@ func (b *broker) config(t *testing.T) Config {
 // freePort returns a port nothing is listening on. The gap between closing the
 // listener and docker binding the port is a race in theory; in a test process
 // that is the only thing asking for ports, it does not happen.
+//
+// Under docker-in-docker this probes the wrong host - the port has to be free
+// on the daemon's host, not on this one - but a dind daemon starts empty, so a
+// port free here is free there too. A collision would fail the container start
+// with a clear message rather than hang.
 func freePort() (string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

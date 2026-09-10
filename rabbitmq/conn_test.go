@@ -32,8 +32,16 @@ func run(t *testing.T, ctx *testcontext.Context, cfg Config) *Conn {
 		ctx.Wait()
 	})
 
-	_, err := conn.Wait(ctx)
-	require.NoError(t, err)
+	// Bounded, unlike the production call. Wait blocks for as long as it takes
+	// for a broker to come back, which is what a service wants and what a test
+	// must not have: an unreachable broker would otherwise hang here until the
+	// whole test binary times out, and report it as fifteen tests stuck rather
+	// than one address that is wrong.
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	_, err := conn.Wait(waitCtx)
+	require.NoError(t, err, "no broker at %s", cfg.Address)
 
 	return conn
 }
