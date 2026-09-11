@@ -21,16 +21,15 @@
 // the outbound side, because *http.Client is the type every framework and every
 // vendored SDK already accepts.
 //
-// # Retry is off by default
+// # The client never retries
 //
-// A client that retries by default triples the load on a dependency that is
+// A client that retries on its own triples the load on a dependency that is
 // already failing, and a replayed POST that timed out after succeeding charges
-// the card twice. So the retry layer is always installed and always asks:
+// the card twice. So every call is one attempt, and retrying is something the
+// caller does, in the open, with [Retry.Do]:
 //
-//	resp, err := client.Do(req.WithContext(httpclient.WithRetry(ctx)))
-//
-// One client, one connection pool, and the decision at the call site that knows
-// whether replaying is safe.
+//	policy := httpclient.Retry{Name: "billing", MaxAttempts: 4}
+//	resp, err := policy.Do(ctx, client, newRequest)
 package httpclient
 
 import (
@@ -83,12 +82,6 @@ type Config struct {
 
 	UserAgent string `help:"user-agent header; empty derives one from the binary name and the build stamp" default:""`
 
-	Retry              bool          `help:"retry idempotent requests on a connection error or a retryable status; off because a client that retries by default triples the load on a dependency that is already failing" default:"false"`
-	RetryMax           int           `help:"retries after the first attempt"                                                                                                                                              default:"4"`
-	RetryWaitMin       time.Duration `help:"shortest nominal backoff between attempts"                                                                                                                                    default:"1s"`
-	RetryWaitMax       time.Duration `help:"longest nominal backoff, and the longest Retry-After that will be obeyed"                                                                                                     default:"30s"`
-	RetryNonIdempotent bool          `help:"retry POST and PATCH too; only for endpoints you know are idempotent"                                                                                                         default:"false" hidden:"true"`
-
 	Metrics bool `help:"record monkit series for requests"                                                        default:"true"`
 	HostTag bool `help:"add a host tag to the request counter; only for a client with a small fixed set of hosts" default:"false" hidden:"true"`
 }
@@ -105,8 +98,6 @@ func (config Config) Validate() error {
 		"tls-handshake-timeout":   config.TLSHandshakeTimeout,
 		"response-header-timeout": config.ResponseHeaderTimeout,
 		"idle-conn-timeout":       config.IdleConnTimeout,
-		"retry-wait-min":          config.RetryWaitMin,
-		"retry-wait-max":          config.RetryWaitMax,
 	} {
 		if d < 0 {
 			return Error.Errorf("%s must not be negative", name)
@@ -121,13 +112,6 @@ func (config Config) Validate() error {
 	}
 	if _, err := config.guard(false); err != nil {
 		return err
-	}
-	if config.RetryWaitMin > config.RetryWaitMax {
-		return Error.Errorf(
-			"retry-wait-min %s is longer than retry-wait-max %s",
-			config.RetryWaitMin,
-			config.RetryWaitMax,
-		)
 	}
 	return nil
 }
@@ -198,16 +182,10 @@ func NewWith(
 
 	m := newMetrics(nameTag, config.HostTag)
 
-	// Innermost first. The order is not arbitrary:
-	//
-	//   - the body cap is innermost, the only position where nothing above it
-	//     can have replaced the body already;
-	//   - metrics sit below retry, so one sample is one attempt on the wire -
-	//     the dependency's real latency - rather than a total with two
-	//     backoffs folded invisibly into it;
-	//   - the request id and the user agent sit above retry, so every attempt
-	//     at one request carries the same id, and a server-side dedupe key
-	//     sees three tries at one request rather than three requests.
+	// Innermost first. The body cap is innermost, the only position where
+	// nothing above it can have replaced the body already. There is no retry
+	// layer: each call is one attempt, and Retry.Do makes one call per attempt,
+	// so a metrics sample is always one attempt on the wire.
 	chain := bodyLimitTransport(config.MaxResponseSize, func() {
 		m.capped.Inc(1)
 	}, base)
@@ -216,7 +194,6 @@ func NewWith(
 		chain = m.transport(chain)
 	}
 
-	chain = newRetryTransport(config, log, m, chain)
 	chain = requestIDTransport(chain)
 	chain = userAgentTransport(config.userAgent(), chain)
 

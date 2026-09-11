@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/require"
@@ -205,14 +204,11 @@ func TestABlockedDialIsNotRetried(t *testing.T) {
 	defer server.Close()
 
 	config := testConfig(t)
-	config.Retry = true
-	config.RetryWaitMin = 10 * time.Millisecond
-	config.RetryWaitMax = 20 * time.Millisecond
 
 	client, err := httpclient.NewOneShot(testLogger(t), config)
 	require.NoError(t, err)
 
-	resp, err := get(t, httpclient.WithRetry(ctx), client, server.URL)
+	resp, err := doGet(t, ctx, fastRetry(t), client, server.URL)
 	closeBody(resp)
 
 	require.ErrorIs(t, err, httpclient.ErrBlockedAddress)

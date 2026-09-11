@@ -311,9 +311,6 @@ func TestConfigValidation(t *testing.T) {
 		"an unsupported tls version": func(c *httpclient.Config) { c.TLSMinVersion = "1.1" },
 		"a negative timeout":         func(c *httpclient.Config) { c.Timeout = -time.Second },
 		"a negative redirect cap":    func(c *httpclient.Config) { c.MaxRedirects = -1 },
-		"an inverted retry window": func(c *httpclient.Config) {
-			c.RetryWaitMin, c.RetryWaitMax = time.Minute, time.Second
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -353,7 +350,11 @@ func TestTransportIsExported(t *testing.T) {
 		"the standard library's two is the bug",
 	)
 	require.False(t, transport.DisableKeepAlives)
-	require.NotNil(t, transport.Proxy, "an unguarded transport honors HTTP_PROXY")
+	require.NotNil(
+		t,
+		transport.Proxy,
+		"an unguarded transport honors HTTP_PROXY",
+	)
 
 	oneShot, err := httpclient.OneShotTransport(testConfig(t))
 	require.NoError(t, err)
