@@ -108,47 +108,109 @@ the work either side of the request.
 package sets one because a shared library that assumes every call site
 remembers is a shared library that will be part of an incident.
 
-## Retry is opt-in, per call site
+## Retrying is the caller's job
 
-Off by default, for two reasons. A client that retries by default triples the
-load on a dependency that is already failing. And a POST that timed out may
-well have succeeded, so replaying it charges the card twice.
+The client never retries: every `Do` is one attempt. A client that retries on
+its own triples the load on a dependency that is already failing, and a POST
+that timed out may well have succeeded, so replaying it charges the card twice.
+Whether a call is safe and worth repeating is known at the call site, so that is
+where retrying happens, in the open:
 
 ```go
-resp, err := client.Do(req.WithContext(httpclient.WithRetry(ctx)))
+policy := httpclient.Retry{Name: "billing", MaxAttempts: 4}
+
+resp, err := policy.Do(ctx, billing, func(ctx context.Context) (*http.Request, error) {
+    return http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+})
 ```
 
-The layer is always installed and always reads the context, so one client - and
-one connection pool - serves both the calls that should retry and the calls
-that must not. `WithoutRetry` is the inverse, for a client that retries by
-default.
+`Do` calls the function once per attempt, so a body is sent whole every time -
+build it inside the function, from whatever reader you like. Nothing is buffered
+up front to replay it, which is what `go-retryablehttp` does to every request
+whether a retry happens or not.
 
-What is retried: connection errors that are not certificate failures, `429`, and
-`5xx` except `501`, which is a permanent statement about the endpoint. And only
-if the request can be replayed at all: `GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT`
-and `DELETE`, or anything carrying an `Idempotency-Key`.
+### Before you retry a call
 
-**A retrying call site must set a deadline that covers every attempt.** Retry is
-a `RoundTripper`, so it sits inside `Client.Timeout` and inside the context
-deadline and all the attempts share one budget. A one-second deadline buys no
-useful retry. That is correct rather than a bug - the deadline is your statement
-of how long you are willing to wait - but it surprises people.
+1. **Is it safe to send twice?** `GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT` and
+   `DELETE` are. A `POST` or `PATCH` is only when it carries an
+   `Idempotency-Key` the server honors; without one it gets exactly one attempt,
+   whatever `MaxAttempts` says. `AllowNonIdempotent` overrides that, for an
+   endpoint you know is idempotent.
+2. **Does the deadline cover every attempt?** All the attempts run under one
+   context and share its deadline, and `Client.Timeout` bounds each of them.
+   With the default wait, three retries spend up to 1+2+4 seconds waiting on top
+   of the requests themselves, so a one-second deadline buys no useful retry. A
+   wait that cannot be followed by an attempt before the deadline is not slept:
+   you get the last real answer instead of a bare deadline exceeded.
+3. **Can you see it working?** Each retry counts `http_retries`, tagged by
+   `Name`, and giving up counts `http_retries_exhausted`. With `Log` set, each
+   retry also writes one warn line with the method and the host.
 
-A request body is replayed through `req.GetBody`, which `http.NewRequest` fills
-in for `*bytes.Reader`, `*bytes.Buffer` and `*strings.Reader`. A body from some
-other `io.Reader` is simply not retried; nothing is buffered up front to pretend
-otherwise, which is what `go-retryablehttp` does to every request whether a
-retry happens or not.
+### What is retried: `Retryable`
 
-## `Retry-After` is obeyed, up to a point
+`Retryable` sees each attempt's response and error, and says whether to try
+again. `DefaultRetryable` retries connection errors that are not certificate
+failures or blocked addresses, `429`, and `5xx` except `501`, which is a
+permanent statement about the endpoint. A rule of your own composes with it:
+
+```go
+policy.Retryable = func(resp *http.Response, err error) bool {
+    if resp != nil && resp.StatusCode == http.StatusConflict {
+        return true // this dependency's "busy, try again"
+    }
+    return httpclient.DefaultRetryable(resp, err)
+}
+```
+
+It sees the status and the headers, never the body. A decision that needs the
+body - a `200` that says `{"status":"busy"}` - belongs in a
+[`retry.Backoff`](../retry/README.md) loop around the whole call, read and
+decode included. The caller's context ending is never retried, whatever
+`Retryable` says.
+
+### How long to wait: `Wait`
+
+`Wait` returns the sleep before the next attempt, given the zero-based index of
+the attempt that failed and what it produced. Three come with the package:
+
+| `Wait` | Sleeps |
+| --- | --- |
+| `Exponential(min, max)` | a random time below a nominal wait that doubles from `min` up to `max` |
+| `Constant(d)` | `d`, every time |
+| `RetryAfter(fallback)` | the server's `Retry-After`, or what `fallback` says when it sent none |
+
+The default is `RetryAfter(Exponential(time.Second, 30*time.Second))`. The
+randomness in `Exponential` is the point: when a dependency restarts, every
+instance talking to it fails in the same instant, and without jitter they all
+retry in the same instant too, through every doubling.
+
+Any function of the right shape will do:
+
+```go
+policy.Wait = func(attempt int, _ *http.Response, _ error) time.Duration {
+    return time.Duration(attempt+1) * 500 * time.Millisecond // linear
+}
+```
+
+### `Retry-After` is obeyed, up to a point
 
 Both forms are read: a count of seconds and an HTTP date. The server knows more
-than any backoff can compute, so its answer replaces the computed wait.
+than any backoff can compute, so `RetryAfter` uses its answer in place of the
+fallback.
 
-A `Retry-After` longer than `RetryWaitMax` ends the retrying and hands the
-response back with its body intact. Sleeping for as long as a remote asks is a
-way for whoever operates that remote to hold this service's goroutines and its
-pooled connections.
+Sleeping for as long as a remote asks is a way for whoever operates that remote
+to hold this service's goroutines and its pooled connections. So
+`DefaultRetryable` gives up on a `Retry-After` longer than `MaxRetryAfter` (30s)
+and hands the response back with its body intact; `RetryableWithin(limit)` is
+the same rule with another limit. The bound sits in `Retryable`, which decides
+whether to retry, so that `Wait` only ever answers how long.
+
+### Out of attempts
+
+`Do` returns the last attempt's response and error exactly as the client
+returned them. Out of attempts, you read the final `503` and its body rather
+than an error that hides it. A cancelled context returns the context's error and
+no response, because an answer to an abandoned request is not one.
 
 ## A discarded response is drained before it is closed
 
@@ -203,7 +265,7 @@ No URL, path or query string appears in any series key or in any error message
 this package writes: a path carries ids and a query string carries tokens. There
 is a test that asserts it.
 
-Because retry sits above metrics, one sample is one attempt on the wire - the
+A retry is a new call, so one sample is one attempt on the wire - the
 dependency's real latency - rather than a total with two backoffs folded
 invisibly into it. Because `http.Client` handles redirects above the whole
 chain, a redirect chain produces one sample per hop.
@@ -241,8 +303,31 @@ func NewWith(log *slog.Logger, config Config, base http.RoundTripper) (*http.Cli
 func Transport(config Config) (*http.Transport, error)
 func OneShotTransport(config Config) (*http.Transport, error)
 
-func WithRetry(ctx context.Context) context.Context
-func WithoutRetry(ctx context.Context) context.Context
+type Retry struct {
+    Name               string
+    MaxAttempts        int
+    Retryable          Retryable
+    Wait               Wait
+    AllowNonIdempotent bool
+    Log                *slog.Logger
+}
+
+func (r Retry) Do(ctx context.Context, client *http.Client,
+    newRequest func(ctx context.Context) (*http.Request, error)) (*http.Response, error)
+
+type Retryable func(resp *http.Response, err error) bool
+type Wait func(attempt int, resp *http.Response, err error) time.Duration
+
+func DefaultRetryable(resp *http.Response, err error) bool
+func RetryableWithin(limit time.Duration) Retryable
+func ParseRetryAfter(resp *http.Response) (wait time.Duration, ok bool)
+
+func Exponential(minWait, maxWait time.Duration) Wait
+func Constant(d time.Duration) Wait
+func RetryAfter(fallback Wait) Wait
+
+const DefaultMaxAttempts = 4
+const MaxRetryAfter = 30 * time.Second
 
 const RequestIDHeader = "X-Request-Id"
 

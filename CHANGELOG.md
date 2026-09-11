@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.3.1 (2026-09-11)
+
+Release note: [`.gitlab/releases/v0.3.1.md`](.gitlab/releases/v0.3.1.md).
+
+Two `httpclient` changes, both visible to a caller: a guard against server-side
+request forgery, and retry moved out of the client to the call site.
+
+### Changed
+
+**`httpclient` no longer retries inside the client** (breaking). The retry
+`RoundTripper`, `WithRetry`, `WithoutRetry` and the `retry`, `retry-max`,
+`retry-wait-min`, `retry-wait-max` and `retry-non-idempotent` config keys are
+gone. The per-call context flag failed silently - `WithRetry` on a `POST`, or on
+a body that could not be rewound, did nothing - and it leaked into every call
+made further down with the same context. Every call is now one attempt, and a
+call site that should retry says so with `httpclient.Retry`.
+
+To migrate: replace `client.Do(req.WithContext(httpclient.WithRetry(ctx)))`
+with `Retry.Do`, building the request inside its `newRequest` function; delete
+`WithoutRetry`, since the client no longer retries anyway; and remove the
+`retry*` keys from config files.
+
+### Added
+
+**`httpclient.Retry`** - an explicit retry policy for one call site.
+`Retryable(resp, err) bool` decides whether an attempt is worth another and
+`Wait(attempt, resp, err) time.Duration` how long to sleep before the next, with
+`DefaultRetryable`, `RetryableWithin`, `Exponential`, `Constant` and
+`RetryAfter` provided. `Do` builds a fresh request per attempt, drains the
+responses it discards, and returns the last response intact when the attempts
+run out. See [`httpclient/README.md`](httpclient/README.md).
+
+**`httpclient` private-network guard** - `NewOneShot`, the client for URLs
+someone else supplied, refuses to connect to loopback, private, link-local and
+other internal addresses, the cloud metadata endpoint among them, which closes
+server-side request forgery through webhooks and callbacks. The check is on the
+resolved address at dial time, so DNS rebinding and redirects into the network
+are refused too, and a refusal wraps `ErrBlockedAddress` and is never retried.
+`New` allows internal addresses unless `private-networks: block` is set;
+`allowed-networks` exempts prefixes. A guarded transport ignores `HTTP_PROXY`.
+
+### Migration
+
+| Old | New |
+| --- | --- |
+| `client.Do(req.WithContext(httpclient.WithRetry(ctx)))` | `httpclient.Retry{...}.Do(ctx, client, newRequest)` |
+| `httpclient.WithoutRetry(ctx)` | delete it; the client no longer retries |
+| `retry`, `retry-max`, `retry-wait-*`, `retry-non-idempotent` config keys | delete them |
+| `httpclient.NewOneShot` to an internal address | add its prefix to `allowed-networks`, or set `private-networks: allow` |
+
 ## v0.3.0 (2026-09-10)
 
 Release note: [`.gitlab/releases/v0.3.0.md`](.gitlab/releases/v0.3.0.md).
@@ -92,15 +142,6 @@ and is **off by default**: a client that retries by default triples the load on
 a dependency that is already failing, and a replayed POST corrupts data. A call
 site opts in with `httpclient.WithRetry(ctx)`. See
 [`httpclient/README.md`](httpclient/README.md).
-
-**`httpclient` private-network guard** - `NewOneShot`, the client for URLs
-someone else supplied, refuses to connect to loopback, private, link-local and
-other internal addresses, the cloud metadata endpoint among them, which closes
-server-side request forgery through webhooks and callbacks. The check is on the
-resolved address at dial time, so DNS rebinding and redirects into the network
-are refused too, and a refusal wraps `ErrBlockedAddress` and is never retried.
-`New` allows internal addresses unless `private-networks: block` is set;
-`allowed-networks` exempts prefixes. A guarded transport ignores `HTTP_PROXY`.
 
 **`postgres`** - a configured, observable pgx connection pool. `pgxpool.New`
 returns a pool that has not connected to anything, and its idle-connection
@@ -209,7 +250,6 @@ See [`docs/ADOPTING.md`](docs/ADOPTING.md).
 | `aioz-common/stats/version` | `aioz-common/version` |
 | `info.Version` (string) | `info.Version.String()` |
 | `-X .../stats/version.Build.X=` | `-X .../version.buildVersion=` |
-| `httpclient.NewOneShot` to an internal address | add its prefix to `allowed-networks`, or set `private-networks: allow` |
 
 ## v0.2.0
 

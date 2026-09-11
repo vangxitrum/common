@@ -111,18 +111,23 @@ backoff := retry.New(cfg.Publish.Retry, retry.WithRetryable(isTransient))
 err := backoff.Do(ctx, func(ctx context.Context) error { return publishOnce(ctx) })
 ```
 
-HTTP retries are **off by default** and opt in at the call site, because a
-client that retries by default triples the load on a dependency that is already
-failing, and a POST that timed out may well have succeeded:
+An HTTP client **never retries on its own**, because a client that retries by
+default triples the load on a dependency that is already failing, and a POST
+that timed out may well have succeeded. A call site that should retry says so
+with `httpclient.Retry`, which builds a fresh request per attempt:
 
 ```go
-resp, err := billing.Do(req.WithContext(httpclient.WithRetry(ctx)))
+policy := httpclient.Retry{Name: "billing", MaxAttempts: 4}
+resp, err := policy.Do(ctx, billing, func(ctx context.Context) (*http.Request, error) {
+    return http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+})
 ```
 
-One thing to know before using it: retry is a `RoundTripper`, so it sits inside
-`Client.Timeout` and inside the context deadline and every attempt shares one
-budget. A retrying call site has to set a deadline that covers all the attempts,
-not one.
+`Retryable` decides whether an attempt is worth another and `Wait` how long to
+sleep before the next; both have sensible defaults, and both are plain functions
+you can replace. Every attempt shares the context's deadline, so a retrying call
+site has to set one that covers all the attempts, not one. See
+[`httpclient`](../httpclient/README.md#retrying-is-the-callers-job).
 
 ## Configuration
 
