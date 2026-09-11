@@ -53,9 +53,6 @@ func testConfig(t *testing.T) httpclient.Config {
 		TLSMinVersion:         "1.2",
 		MaxRedirects:          10,
 		MaxResponseSize:       32 * memory.MiB,
-		RetryMax:              4,
-		RetryWaitMin:          time.Second,
-		RetryWaitMax:          30 * time.Second,
 		Metrics:               true,
 	}
 }

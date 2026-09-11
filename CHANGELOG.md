@@ -93,6 +93,15 @@ a dependency that is already failing, and a replayed POST corrupts data. A call
 site opts in with `httpclient.WithRetry(ctx)`. See
 [`httpclient/README.md`](httpclient/README.md).
 
+**`httpclient` private-network guard** - `NewOneShot`, the client for URLs
+someone else supplied, refuses to connect to loopback, private, link-local and
+other internal addresses, the cloud metadata endpoint among them, which closes
+server-side request forgery through webhooks and callbacks. The check is on the
+resolved address at dial time, so DNS rebinding and redirects into the network
+are refused too, and a refusal wraps `ErrBlockedAddress` and is never retried.
+`New` allows internal addresses unless `private-networks: block` is set;
+`allowed-networks` exempts prefixes. A guarded transport ignores `HTTP_PROXY`.
+
 **`postgres`** - a configured, observable pgx connection pool. `pgxpool.New`
 returns a pool that has not connected to anything, and its idle-connection
 priming is a goroutine with a discarded error, so a wrong host or an expired
@@ -200,6 +209,7 @@ See [`docs/ADOPTING.md`](docs/ADOPTING.md).
 | `aioz-common/stats/version` | `aioz-common/version` |
 | `info.Version` (string) | `info.Version.String()` |
 | `-X .../stats/version.Build.X=` | `-X .../version.buildVersion=` |
+| `httpclient.NewOneShot` to an internal address | add its prefix to `allowed-networks`, or set `private-networks: allow` |
 
 ## v0.2.0
 

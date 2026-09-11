@@ -63,6 +63,41 @@ There is no `keep-alives` flag, on purpose. If there were, you could turn a
 long-lived client into a transient one by editing YAML, and the choice would
 stop being visible in the code that makes it.
 
+## `NewOneShot` refuses internal addresses; `New` can be told to
+
+A client aimed at a URL someone else supplied - a webhook, a callback, an image
+to fetch - can be aimed at `http://169.254.169.254/`, the cloud metadata
+endpoint that hands out the instance's credentials, or at any service on the
+internal network. That is server-side request forgery. `NewOneShot` is the
+client for exactly those URLs, so it refuses internal addresses unless told
+otherwise. `New` is for a dependency named in configuration, which is usually
+internal, so it allows them unless told otherwise.
+
+```yaml
+private-networks: block            # or allow; empty lets the constructor choose
+allowed-networks: [10.20.0.0/16]   # exempt these, block the rest
+```
+
+- The check is on the address being dialed, after DNS resolution, not on the
+  URL's host. A host check is defeated by any name that resolves inside, and by
+  DNS rebinding, where one name answers public when checked and private when
+  connected to.
+- Every redirect hop is a new dial, so a public URL that redirects inside is
+  refused at the hop that goes inside.
+- Blocked: loopback, private, link-local, carrier-grade NAT, unique-local and
+  site-local IPv6, multicast, reserved and documentation ranges, and an internal
+  IPv4 address written as IPv4-mapped, NAT64 or 6to4 IPv6.
+- Setting `allowed-networks` turns blocking on, even for `New`: an allowlist on
+  a client that allows everything would mean nothing. Only
+  `private-networks: allow` turns the guard off.
+- A guarded transport does not use `HTTP_PROXY`. Through a proxy the guard
+  would only ever see the proxy's address, and the proxy would connect wherever
+  the URL says.
+- A refusal wraps `ErrBlockedAddress`, is never retried, and counts
+  `http_dial_refused`, tagged by client and reason.
+- `NewWith` over a transport you built is guarded only if that transport came
+  from `Transport` or `OneShotTransport`.
+
 ## The timeout is a backstop; the context is the bound
 
 `Timeout` catches the caller who forgot a deadline. It is not the mechanism:
@@ -215,6 +250,7 @@ func WithRequestID(ctx context.Context, id string) context.Context
 func RequestID(ctx context.Context) string
 
 var Error = errs.Tag("httpclient")
+var ErrBlockedAddress = errors.New("address blocked by the private-network guard")
 ```
 
 ## Tests

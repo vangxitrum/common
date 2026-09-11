@@ -38,12 +38,10 @@ type metrics struct {
 	// hostTag is the escape hatch for a client with a small, fixed set of
 	// hosts. The set is not known at construction, so unlike the counters above
 	// it costs a lock - which is why it is off by default.
-	hostTag  bool
-	mu       sync.RWMutex
-	byHost   map[hostKey]*monkit.Counter
-	capped   *monkit.Counter
-	retries  *monkit.Counter
-	exhausts *monkit.Counter
+	hostTag bool
+	mu      sync.RWMutex
+	byHost  map[hostKey]*monkit.Counter
+	capped  *monkit.Counter
 }
 
 type hostKey struct{ host, method, class string }
@@ -55,8 +53,6 @@ func newMetrics(name monkit.SeriesTag, hostTag bool) *metrics {
 		hostTag:  hostTag,
 		byHost:   map[hostKey]*monkit.Counter{},
 		capped:   mon.Counter("http_body_capped", name),
-		retries:  mon.Counter("http_retries", name),
-		exhausts: mon.Counter("http_retries_exhausted", name),
 	}
 
 	for i, method := range countedMethods {
@@ -71,9 +67,8 @@ func newMetrics(name monkit.SeriesTag, hostTag bool) *metrics {
 
 // transport times one round trip.
 //
-// It sits below the retry layer, so a sample is one attempt on the wire - the
-// dependency's real latency - rather than a total that hides two backoffs
-// inside it. The retry counter carries the total.
+// A sample is one attempt on the wire - the dependency's real latency - because
+// a retry is a new call. The http_retries counter carries the retries.
 func (m *metrics) transport(next http.RoundTripper) http.RoundTripper {
 	return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		// Measurement is not waiting, so this is the real clock rather than

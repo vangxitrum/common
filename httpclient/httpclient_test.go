@@ -237,11 +237,15 @@ func TestOneShotDoesNotPool(t *testing.T) {
 			server.Start()
 			defer server.Close()
 
+			config := testConfig(t)
 			build := httpclient.New
 			if oneShot {
 				build = httpclient.NewOneShot
+				// The server is on loopback, which the one-shot profile
+				// refuses by default; this test is about pooling.
+				config.AllowedNetworks = []string{"127.0.0.0/8"}
 			}
-			client, err := build(testLogger(t), testConfig(t))
+			client, err := build(testLogger(t), config)
 			require.NoError(t, err)
 
 			for range 2 {
@@ -307,9 +311,6 @@ func TestConfigValidation(t *testing.T) {
 		"an unsupported tls version": func(c *httpclient.Config) { c.TLSMinVersion = "1.1" },
 		"a negative timeout":         func(c *httpclient.Config) { c.Timeout = -time.Second },
 		"a negative redirect cap":    func(c *httpclient.Config) { c.MaxRedirects = -1 },
-		"an inverted retry window": func(c *httpclient.Config) {
-			c.RetryWaitMin, c.RetryWaitMax = time.Minute, time.Second
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -349,11 +350,17 @@ func TestTransportIsExported(t *testing.T) {
 		"the standard library's two is the bug",
 	)
 	require.False(t, transport.DisableKeepAlives)
+	require.NotNil(
+		t,
+		transport.Proxy,
+		"an unguarded transport honors HTTP_PROXY",
+	)
 
 	oneShot, err := httpclient.OneShotTransport(testConfig(t))
 	require.NoError(t, err)
 	require.True(t, oneShot.DisableKeepAlives)
 	require.Equal(t, -1, oneShot.MaxIdleConnsPerHost)
+	require.Nil(t, oneShot.Proxy, "a proxy would dial on the guard's behalf")
 }
 
 func TestErrorsCarryNoPathOrQuery(t *testing.T) {

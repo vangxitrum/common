@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,227 +14,189 @@ import (
 
 	"github.com/spacemonkeygo/monkit/v3"
 
-	"gitlab.internal/tuan.quang.tran/aioz-common/retry"
+	"gitlab.internal/tuan.quang.tran/aioz-common/time2"
 )
 
-type retryKey struct{}
-
-// WithRetry opts one call site into retrying, on a client that does not retry
-// by default.
+// Retryable decides whether a finished attempt is worth another.
 //
-// The layer is always installed and always reads the context, so a single
-// shared client - and a single connection pool - serves both the calls that
-// should retry and the calls that must not.
-func WithRetry(ctx context.Context) context.Context {
-	return context.WithValue(ctx, retryKey{}, true)
-}
+// err is set when the attempt failed without an answer; resp is then usually
+// nil. It must not read resp.Body: the body is either drained for the next
+// attempt or handed back to the caller, and neither wants it half read.
+type Retryable func(resp *http.Response, err error) bool
 
-// WithoutRetry opts one call site out of retrying, on a client that retries by
-// default.
-func WithoutRetry(ctx context.Context) context.Context {
-	return context.WithValue(ctx, retryKey{}, false)
-}
+// Wait returns how long to sleep before the next attempt. attempt is the
+// zero-based index of the attempt that just failed, and resp and err are what
+// it produced.
+type Wait func(attempt int, resp *http.Response, err error) time.Duration
 
-func retryWanted(ctx context.Context, byDefault bool) bool {
-	if wanted, ok := ctx.Value(retryKey{}).(bool); ok {
-		return wanted
-	}
-	return byDefault
-}
+const (
+	// DefaultMaxAttempts is what a Retry with no MaxAttempts makes.
+	DefaultMaxAttempts = 4
 
-// retryTransport replays a request that failed in a way worth replaying.
+	// MaxRetryAfter is the longest Retry-After DefaultRetryable waits for.
+	MaxRetryAfter = 30 * time.Second
+)
+
+// Retry is a caller's policy for one call site: how often, on what, and how
+// long to wait in between.
 //
-// It is a RoundTripper rather than a wrapper around Client.Do for one reason
-// that decides everything else: New returns an *http.Client, so it has to work
-// inside any vendored SDK that takes one. A RoundTripper also sees
-// req.GetBody, which http.NewRequest fills in for the common body types, so a
-// replay costs nothing and no body is ever buffered up front.
+// A client never retries on its own. A client that retries by default triples
+// the load on a dependency that is already failing, and a replayed POST that
+// timed out after succeeding charges the card twice - so retrying is something
+// the caller does, where the knowledge of what is safe to repeat lives.
+type Retry struct {
+	// Name tags the retry metrics; empty means "http".
+	Name string
+
+	// MaxAttempts is the total number of attempts, the first included. Zero
+	// means DefaultMaxAttempts, and one means no retry.
+	MaxAttempts int
+
+	// Retryable decides whether an attempt is worth another; nil means
+	// DefaultRetryable.
+	Retryable Retryable
+
+	// Wait decides how long to sleep between attempts; nil means Retry-After
+	// when the server sent one, and Exponential(time.Second, 30*time.Second)
+	// otherwise.
+	Wait Wait
+
+	// AllowNonIdempotent retries a POST or PATCH that carries no
+	// Idempotency-Key. Without it such a request gets exactly one attempt,
+	// because a POST that timed out may well have succeeded.
+	AllowNonIdempotent bool
+
+	// Log, when set, gets one warn line per retry.
+	Log *slog.Logger
+}
+
+// Do calls the client until an attempt is not worth repeating, the attempts
+// run out, or ctx ends.
 //
-// The cost is that it sits inside Client.Timeout and inside the caller's
-// deadline, so every attempt shares one budget. That is correct - the deadline
-// is the caller's statement of how long it is willing to wait - but it means a
-// retrying call site has to set a deadline that covers all the attempts.
-type retryTransport struct {
-	next    http.RoundTripper
-	log     *slog.Logger
-	metrics *metrics
-
-	byDefault     bool
-	nonIdempotent bool
-	maxAttempts   int
-	waitMax       time.Duration
-	backoff       *retry.Backoff
-	name          monkit.SeriesTag
-}
-
-func newRetryTransport(
-	config Config,
-	log *slog.Logger,
-	m *metrics,
-	next http.RoundTripper,
-) *retryTransport {
-	return &retryTransport{
-		next:    next,
-		log:     log,
-		metrics: m,
-
-		byDefault:     config.Retry,
-		nonIdempotent: config.RetryNonIdempotent,
-		maxAttempts:   config.RetryMax + 1,
-		waitMax:       config.RetryWaitMax,
-		backoff: retry.New(retry.Config{
-			Name:         config.Name,
-			MaxAttempts:  config.RetryMax + 1,
-			InitialDelay: config.RetryWaitMin,
-			MaxDelay:     config.RetryWaitMax,
-			Multiplier:   2,
-			Jitter:       true,
-		}),
-		name: monkit.NewSeriesTag("name", config.Name),
+// newRequest builds the request for each attempt, so a body is sent whole every
+// time and nothing is buffered to replay it. What comes back is the last
+// attempt's response and error, exactly as the client returned them: out of
+// attempts, the caller reads the final 503 rather than an error that hides it.
+// A response that was superseded by another attempt is drained, which keeps its
+// connection in the pool.
+//
+// Every attempt shares ctx, so a deadline on it covers them all, and a wait
+// that cannot be followed by an attempt before the deadline is not slept.
+func (r Retry) Do(
+	ctx context.Context,
+	client *http.Client,
+	newRequest func(ctx context.Context) (*http.Request, error),
+) (*http.Response, error) {
+	maxAttempts := r.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = DefaultMaxAttempts
 	}
-}
-
-func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !t.shouldRetry(req) {
-		return t.next.RoundTrip(req)
+	retryable := r.Retryable
+	if retryable == nil {
+		retryable = DefaultRetryable
 	}
+	wait := r.Wait
+	if wait == nil {
+		wait = RetryAfter(Exponential(time.Second, 30*time.Second))
+	}
+	name := monkit.NewSeriesTag("name", r.name())
 
-	loop := t.backoff.Loop()
-	var (
-		resp *http.Response
-		err  error
-	)
+	for attempt := 0; ; attempt++ {
+		req, err := newRequest(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if attempt == 0 && !r.replayable(req) {
+			maxAttempts = 1
+		}
 
-	for loop.Wait(req.Context()) {
-		if resp != nil {
-			// The previous attempt has been superseded, so drain it. A body
-			// closed unread costs the connection it arrived on, which is the
-			// last thing a service retrying through an incident can afford.
-			drain(resp)
+		//nolint:bodyclose // a superseded response is drained below; the last one belongs to the caller
+		resp, err := client.Do(req)
 
-			t.metrics.retries.Inc(1)
-			mon.Event("http_retry", t.name)
-
-			if t.log != nil {
-				// The host and the method, never the URL: a path carries ids
-				// and a query string carries tokens.
-				t.log.Warn("retrying an http request",
-					"client", t.name.Val, "method", req.Method,
-					"host", req.URL.Host, "attempt", loop.Attempt())
+		// The caller giving up is never a reason to try again, and only the
+		// context can say so: a per-attempt timeout looks the same in err.
+		if ctx.Err() != nil || !retryable(resp, err) {
+			return resp, err
+		}
+		if attempt+1 >= maxAttempts {
+			if maxAttempts > 1 {
+				mon.Counter("http_retries_exhausted", name).Inc(1)
 			}
-		}
-
-		attempt, bodyErr := t.attemptRequest(req)
-		if bodyErr != nil {
-			return nil, bodyErr
-		}
-
-		//nolint:bodyclose // a superseded response is drained at the top of the next turn; the last one belongs to the caller
-		resp, err = t.next.RoundTrip(attempt)
-		if !t.retryable(attempt, resp, err) {
 			return resp, err
 		}
 
-		wait, ok := retryAfter(resp, err)
-		if !ok {
-			continue // no instruction, so the computed backoff applies
-		}
-		if wait > t.waitMax {
-			// Waiting as long as a remote asks is a way for whoever runs that
-			// remote to hold this service's goroutines and its pooled
-			// connections. Hand the response back instead, body intact, and
-			// let the caller decide what to do about it.
-			mon.Event("http_retry_after_too_long", t.name)
+		delay := max(wait(attempt, resp, err), 0)
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 			return resp, err
 		}
-		loop.Override(wait)
-	}
 
-	if errors.Is(loop.Err(), retry.ErrExhausted) {
-		t.metrics.exhausts.Inc(1)
-		mon.Event("http_retry_exhausted", t.name)
-	}
-
-	// The caller stopped us mid-sequence. Handing back the response we happened
-	// to be holding would answer a request that was abandoned, so drain it and
-	// report the cancellation, which is what any other transport would do.
-	if ctxErr := req.Context().Err(); ctxErr != nil {
 		drain(resp)
-		return nil, Error.Wrap(ctxErr)
-	}
+		if !time2.Sleep(ctx, delay) {
+			// Handing back a response now would answer a request the caller
+			// abandoned.
+			return nil, Error.Wrap(ctx.Err())
+		}
 
-	// The final attempt was never drained, so the caller gets a readable
-	// response rather than an error that hides the status behind it.
-	if resp == nil && err == nil {
-		return nil, Error.Wrap(req.Context().Err())
+		mon.Counter("http_retries", name).Inc(1)
+		if r.Log != nil {
+			// The host and the method, never the URL: a path carries ids and
+			// a query string carries tokens.
+			r.Log.WarnContext(ctx, "retrying an http request",
+				"client", name.Val, "method", req.Method,
+				"host", req.URL.Host, "attempt", attempt+2)
+		}
 	}
-	return resp, err
 }
 
-// attemptRequest clones the request and rewinds its body.
-//
-// The caller's request is never modified: the RoundTripper contract forbids it,
-// and violations only show up under concurrency.
-func (t *retryTransport) attemptRequest(
-	req *http.Request,
-) (*http.Request, error) {
-	clone := req.Clone(req.Context())
-	if req.GetBody == nil {
-		return clone, nil
+func (r Retry) name() string {
+	if r.Name == "" {
+		return "http"
 	}
-
-	body, err := req.GetBody()
-	if err != nil {
-		return nil, Error.Errorf("rewinding the request body: %w", err)
-	}
-	clone.Body = body
-	return clone, nil
+	return r.Name
 }
 
-// shouldRetry reports whether this request may be replayed at all.
-func (t *retryTransport) shouldRetry(req *http.Request) bool {
-	if t.maxAttempts <= 1 || !retryWanted(req.Context(), t.byDefault) {
-		return false
-	}
-
-	// A body from an arbitrary io.Reader cannot be rewound, and this package
-	// does not buffer one to pretend otherwise.
-	if req.Body != nil && req.GetBody == nil {
-		return false
-	}
-
-	if idempotent(req.Method) || req.Header.Get("Idempotency-Key") != "" {
-		return true
-	}
-	return t.nonIdempotent
+// replayable reports whether the request may be sent more than once.
+func (r Retry) replayable(req *http.Request) bool {
+	return idempotent(req.Method) ||
+		req.Header.Get("Idempotency-Key") != "" ||
+		r.AllowNonIdempotent
 }
 
-// retryable decides whether this attempt is worth another.
-func (t *retryTransport) retryable(
-	req *http.Request,
-	resp *http.Response,
-	err error,
-) bool {
-	// The caller giving up is never a reason to try again, and only the
-	// context can say that: an inner timeout looks identical in the error.
-	if req.Context().Err() != nil {
-		return false
-	}
+// DefaultRetryable retries what may pass: a connection error that is not a
+// certificate failure or a blocked address, a 429, and a 5xx other than 501.
+// It gives up on a Retry-After longer than MaxRetryAfter.
+func DefaultRetryable(resp *http.Response, err error) bool {
+	return retryable(resp, err, MaxRetryAfter)
+}
 
+// RetryableWithin is DefaultRetryable with a different Retry-After limit.
+func RetryableWithin(limit time.Duration) Retryable {
+	return func(resp *http.Response, err error) bool {
+		return retryable(resp, err, limit)
+	}
+}
+
+func retryable(resp *http.Response, err error, limit time.Duration) bool {
 	if err != nil {
 		return retryableError(err)
 	}
 
-	switch resp.StatusCode {
-	case http.StatusTooManyRequests:
-		return true
-	case http.StatusNotImplemented:
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
+	case resp.StatusCode == http.StatusNotImplemented:
 		// A permanent statement about the endpoint. Retrying it is guaranteed
 		// waste.
 		return false
-	default:
-		return resp.StatusCode >= 500
+	case resp.StatusCode < 500:
+		return false
 	}
+
+	// Waiting as long as a remote asks is a way for whoever runs that remote to
+	// hold this service's goroutines and its pooled connections.
+	if wait, ok := ParseRetryAfter(resp); ok && wait > limit {
+		return false
+	}
+	return true
 }
 
 // retryableError separates a fault that may pass from one that never will.
@@ -247,10 +210,14 @@ func retryableError(err error) bool {
 		return false
 	}
 
+	if errors.Is(err, ErrBlockedAddress) {
+		// Refused by address, and it will be the same address next time.
+		return false
+	}
+
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		// A bad scheme, a missing host, or our own redirect policy refusing.
-		// None of them is transient.
+		// Our own redirect policy refusing is not transient either.
 		if urlErr.Err != nil && errors.Is(urlErr.Err, errRedirect) {
 			return false
 		}
@@ -258,12 +225,12 @@ func retryableError(err error) bool {
 	return true
 }
 
-// retryAfter reads the header the server used to say how long to wait.
+// ParseRetryAfter reads how long a 429 or a 503 asked the caller to wait.
 //
 // Both forms RFC 9110 allows are accepted: a count of seconds, and an HTTP
-// date. A server that says nothing gets the computed backoff instead.
-func retryAfter(resp *http.Response, err error) (time.Duration, bool) {
-	if err != nil || resp == nil {
+// date. ok is false when there is no usable instruction.
+func ParseRetryAfter(resp *http.Response) (wait time.Duration, ok bool) {
+	if resp == nil {
 		return 0, false
 	}
 	if resp.StatusCode != http.StatusTooManyRequests &&
@@ -276,20 +243,63 @@ func retryAfter(resp *http.Response, err error) (time.Duration, bool) {
 		return 0, false
 	}
 
-	if seconds, convErr := strconv.Atoi(value); convErr == nil {
+	if seconds, err := strconv.Atoi(value); err == nil {
 		if seconds < 0 {
 			return 0, false
 		}
 		return time.Duration(seconds) * time.Second, true
 	}
 
-	when, convErr := http.ParseTime(value)
-	if convErr != nil {
+	when, err := http.ParseTime(value)
+	if err != nil {
 		return 0, false
 	}
-	wait := time.Until(when)
-	if wait <= 0 {
-		return 0, true
+	return max(time.Until(when), 0), true
+}
+
+// RetryAfter waits as long as the server's Retry-After asked, and as long as
+// fallback says when it asked nothing.
+//
+// It obeys the header whatever its size. Bounding it is the Retryable's job,
+// which is why DefaultRetryable gives up on a Retry-After past MaxRetryAfter.
+func RetryAfter(fallback Wait) Wait {
+	return func(attempt int, resp *http.Response, err error) time.Duration {
+		if wait, ok := ParseRetryAfter(resp); ok {
+			return wait
+		}
+		if fallback == nil {
+			return 0
+		}
+		return fallback(attempt, resp, err)
 	}
-	return wait, true
+}
+
+// Exponential waits a random time below a nominal wait that starts at minWait
+// and doubles after each attempt, up to maxWait.
+//
+// The randomness is the point. When a dependency restarts, every instance that
+// was talking to it fails in the same instant; without jitter they all retry in
+// the same instant too, through every doubling. Full jitter - uniform on [0,
+// nominal) - breaks that up, at the cost of an expected wait half the nominal
+// one.
+func Exponential(minWait, maxWait time.Duration) Wait {
+	maxWait = max(maxWait, minWait)
+	return func(attempt int, _ *http.Response, _ error) time.Duration {
+		nominal := minWait
+		for i := 0; i < attempt && nominal > 0 && nominal < maxWait; i++ {
+			nominal *= 2
+		}
+		// A doubling past maxWait, or one that overflowed.
+		if nominal > maxWait || nominal < 0 {
+			nominal = maxWait
+		}
+		// The top-level math/rand/v2 functions keep per-P state and take no
+		// global lock, which matters when a hundred goroutines back off at once.
+		return time.Duration(rand.Float64() * float64(nominal))
+	}
+}
+
+// Constant waits d between every pair of attempts.
+func Constant(d time.Duration) Wait {
+	return func(int, *http.Response, error) time.Duration { return d }
 }
