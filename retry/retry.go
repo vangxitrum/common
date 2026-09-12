@@ -38,6 +38,10 @@ package retry
 import (
 	"context"
 	"log/slog"
+
+	// math/rand, not crypto/rand, on purpose: jitter only has to differ
+	// between instances, not be unguessable. The module's no-math-rand lint
+	// rule exempts this file for exactly this use.
 	"math/rand/v2"
 	"time"
 
