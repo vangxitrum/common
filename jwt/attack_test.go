@@ -200,3 +200,49 @@ func TestWrongKeyIsRejected(t *testing.T) {
 	_, err = verifier.Verify(ctx, signed.Reveal())
 	require.Error(t, err)
 }
+
+// A signature proves who minted a token, not what it was minted for. The same
+// issuer key may sign ID tokens, refresh tokens or internal tokens that carry
+// every claim an access token needs; an access-token verifier that does not
+// check "typ" accepts any of them (RFC 8725 section 3.11).
+func TestAccessTokenVerifierRefusesOtherTokenTypes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	key := ecKey(t)
+	verifier, err := jwt.NewKeyVerifier(jwt.ES256, &key.PublicKey,
+		jwt.RequireAudience("api"), jwt.RequireType(jwt.TypeAccessToken))
+	require.NoError(t, err)
+
+	claims := jwt.Claims{Subject: "user-1", Audience: []string{"api"}, ExpiresAt: time.Now().Add(time.Hour)}
+
+	// Validly signed by the real key, with the right audience, but typed "JWT"
+	// - what every JWT library stamps by default.
+	idTokenSigner, err := jwt.NewKeySigner(jwt.ES256, key)
+	require.NoError(t, err)
+	idToken, err := idTokenSigner.Sign(ctx, claims)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(ctx, idToken.Reveal())
+	require.Error(t, err, "a token typed JWT must not pass as an access token")
+
+	// And with no "typ" at all.
+	untyped := gojwt.NewWithClaims(gojwt.SigningMethodES256, gojwt.MapClaims{
+		"sub": "user-1", "aud": "api", "exp": time.Now().Add(time.Hour).Unix(),
+	})
+	delete(untyped.Header, "typ")
+	untypedString, err := untyped.SignedString(key)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(ctx, untypedString)
+	require.Error(t, err, "a token with no type must not pass as an access token")
+
+	// The companion check: the same token is fine once it says what it is, so
+	// the refusals above are about the type and nothing else.
+	accessSigner, err := jwt.NewKeySigner(jwt.ES256, key, jwt.WithType(jwt.TypeAccessToken))
+	require.NoError(t, err)
+	accessToken, err := accessSigner.Sign(ctx, claims)
+	require.NoError(t, err)
+	_, err = verifier.Verify(ctx, accessToken.Reveal())
+	require.NoError(t, err)
+}

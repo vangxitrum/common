@@ -3,6 +3,8 @@ package jwt
 import (
 	"context"
 	"crypto"
+	"errors"
+	"strings"
 	"time"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/time2"
@@ -17,6 +19,7 @@ type Verifier struct {
 	alg   Algorithm
 	key   any
 	keyID string
+	typ   string
 
 	issuer        string
 	audience      string
@@ -31,6 +34,19 @@ type VerifierOption func(*Verifier)
 // route to it. It does not by itself require a token to carry that kid.
 func ExpectKeyID(id string) VerifierOption {
 	return func(v *Verifier) { v.keyID = id }
+}
+
+// RequireType rejects a token whose "typ" header is not typ, or that has none.
+//
+// Set it wherever the issuer mints more than one kind of token with the same
+// key. The signature proves who minted a token, not what it was minted for,
+// so without a type check an ID token or a refresh token that happens to
+// carry the right claims is accepted as an access token (RFC 8725 section
+// 3.11). The comparison ignores case and an "application/" prefix on either
+// side, because RFC 7515 section 4.1.9 lets the prefix be dropped and RFC 9068
+// accepts both "at+jwt" and "application/at+jwt".
+func RequireType(typ string) VerifierOption {
+	return func(v *Verifier) { v.typ = typ }
 }
 
 // RequireIssuer rejects a token whose "iss" is not issuer.
@@ -137,6 +153,10 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Claims, error) {
 
 	parsed, err := gojwt.NewParser(opts...).Parse(token, v.keyFunc)
 	if err != nil {
+		var mismatch typeError
+		if errors.As(err, &mismatch) {
+			return Claims{}, mismatch.error
+		}
 		return Claims{}, Error.Wrap(err)
 	}
 
@@ -147,7 +167,7 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Claims, error) {
 	return claimsFromMap(mapped), nil
 }
 
-// keyFunc supplies the key, and re-checks the algorithm.
+// keyFunc supplies the key, re-checks the algorithm, and checks the type.
 //
 // WithValidMethods already rejects a mismatched header, so this is a second
 // gate on the same property. It is here deliberately: this is the callback the
@@ -158,5 +178,44 @@ func (v *Verifier) keyFunc(token *gojwt.Token) (any, error) {
 	if alg, _ := token.Header["alg"].(string); alg != string(v.alg) {
 		return nil, Error.Errorf("token algorithm %q does not match the expected %q", alg, v.alg)
 	}
+	if v.typ != "" {
+		if err := checkType(token.Header, v.typ); err != nil {
+			return nil, err
+		}
+	}
 	return v.key, nil
+}
+
+// checkType compares a token's "typ" header with want.
+//
+// It runs in keyFunc, before the signature and the claims are checked, which
+// is the order RFC 9068 section 4 gives. The header is not verified yet, and
+// that is safe: a mismatch can only reject, and a token that passes still
+// needs a valid signature. A missing or non-string "typ" is a mismatch, not a pass:
+// the point of requiring a type is that a token without one is not the
+// token asked for.
+func checkType(header map[string]any, want string) error {
+	got, _ := header["typ"].(string)
+	if got == "" {
+		return typeError{Error.Errorf("token carries no type; %q is required", want)}
+	}
+	if !strings.EqualFold(mediaType(got), mediaType(want)) {
+		return typeError{Error.Errorf("token type %q is not the required %q", got, want)}
+	}
+	return nil
+}
+
+// typeError marks a type mismatch found in keyFunc, so Verify can return it as
+// it is rather than inside the parser's "error while executing keyfunc"
+// wrapping. The mismatch is the whole story; the parser's framing of it is
+// noise, and would make it match gojwt.ErrTokenUnverifiable as well.
+type typeError struct{ error }
+
+// mediaType drops an "application/" prefix, in any case, from a "typ" value.
+func mediaType(typ string) string {
+	const prefix = "application/"
+	if len(typ) >= len(prefix) && strings.EqualFold(typ[:len(prefix)], prefix) {
+		return typ[len(prefix):]
+	}
+	return typ
 }

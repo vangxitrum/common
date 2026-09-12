@@ -81,6 +81,15 @@ const (
 	EdDSA Algorithm = "EdDSA"
 )
 
+// TypeAccessToken is the "typ" header of an OAuth 2.0 access token in the JWT
+// profile of RFC 9068.
+//
+// Stamp it with [WithType] and require it with [RequireType]. A service that
+// accepts more than one kind of token from the same issuer - an access token
+// and an ID token, say - otherwise has no way to tell them apart, and a token
+// minted for one purpose is replayed for the other (RFC 8725 section 3.11).
+const TypeAccessToken = "at+jwt"
+
 // IsHMAC reports whether a takes a shared secret rather than a key pair.
 func (a Algorithm) IsHMAC() bool {
 	switch a {
