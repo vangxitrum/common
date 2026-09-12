@@ -1,9 +1,10 @@
 package secret
 
 import (
-	"crypto/rand"
 	"hash/crc32"
 	"strings"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/random"
 )
 
 // base62Alphabet is digits, then upper, then lower.
@@ -14,40 +15,17 @@ import (
 // and a YAML scalar unquoted, and does not get broken across a line.
 const base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-// base62Max is the largest byte value that can be reduced mod 62 without bias:
-// 4*62 = 248, so bytes 248..255 are discarded rather than folded.
-const base62Max = 248
-
 // randBase62 returns n cryptographically random base62 characters.
 //
-// It samples by rejection rather than by reducing a big.Int. Reduction loses
-// leading zeros and yields a variable-width result, and the naive b%62 over
-// the whole byte range makes the first eight characters of the alphabet
-// slightly more likely, which is a real bias in a secret's first character.
+// It is aioz-common/random.String over the same alphabet, which samples by
+// rejection: the naive b%62 over the whole byte range makes the first eight
+// characters of the alphabet slightly more likely, a real bias in a secret's
+// first character.
 //
 // Unlike [Bytes] this has no minimum: it is a building block, and its callers
 // (which do have minimums) are in this package.
 func randBase62(n int) string {
-	var sb strings.Builder
-	sb.Grow(n)
-
-	// Draw in blocks, with headroom for the ~3% of bytes that get rejected.
-	buf := make([]byte, n+n/8+8)
-	for sb.Len() < n {
-		// crypto/rand.Read terminates the process rather than returning an
-		// error, so the only honest thing to do with its result is ignore it.
-		_, _ = rand.Read(buf)
-		for _, b := range buf {
-			if b >= base62Max {
-				continue
-			}
-			sb.WriteByte(base62Alphabet[b%62])
-			if sb.Len() == n {
-				break
-			}
-		}
-	}
-	return sb.String()
+	return random.String(n, random.Base62)
 }
 
 // isBase62 reports whether s is non-empty and made only of alphabet characters.

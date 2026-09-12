@@ -33,10 +33,11 @@
 package secret
 
 import (
-	"crypto/rand"
 	"fmt"
 
 	"github.com/zeebo/errs/v2"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/random"
 )
 
 // Error tags every failure this package produces.
@@ -55,9 +56,5 @@ func Bytes(n int) []byte {
 	if n < MinBytes {
 		panic(fmt.Sprintf("secret: %d bytes is below the %d-byte minimum", n, MinBytes))
 	}
-	b := make([]byte, n)
-	// crypto/rand.Read terminates the process rather than returning an error,
-	// so the only honest thing to do with its result is ignore it.
-	_, _ = rand.Read(b)
-	return b
+	return random.Bytes(n)
 }
