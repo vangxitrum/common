@@ -13,8 +13,8 @@ type requestIDKey struct{}
 // WithRequestID puts a request id on the context, so every request made with
 // that context carries it.
 //
-// It is set above the retry layer, which means every attempt at one request
-// sends the same id. That is what makes a server-side dedupe or idempotency key
+// It is read from the context, and Retry.Do runs every attempt under one
+// context, so every attempt at one request sends the same id. That is what makes a server-side dedupe or idempotency key
 // see three tries at one request rather than three unrelated requests.
 func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, id)

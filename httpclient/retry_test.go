@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -842,4 +843,53 @@ func TestAnOversizedDiscardedBodyIsNotFullyDrained(t *testing.T) {
 
 	require.Equal(t, 2, handler.calls())
 	require.Equal(t, 2, counter.count())
+}
+
+// A caller that builds the key inside newRequest - which is where the docs say
+// to build the request - makes a new one on every attempt. Sent as it is, the
+// retry is a new request to the server, and a POST that timed out after
+// charging the card charges it again. Do sends the first attempt's key on
+// every retry instead.
+func TestRetryKeepsTheFirstIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	handler := newScript(status(http.StatusServiceUnavailable), status(http.StatusOK))
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	var built int
+	resp, err := fastRetry(t).Do(ctx, newClient(t), func(ctx context.Context) (*http.Request, error) {
+		built++
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, strings.NewReader("charge"))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Idempotency-Key", fmt.Sprintf("key-%d", built))
+		return req, nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	require.Equal(t, 2, handler.calls())
+	require.Equal(t, "key-1", handler.call(0).header.Get("Idempotency-Key"))
+	require.Equal(t, "key-1", handler.call(1).header.Get("Idempotency-Key"),
+		"the retry must carry the key the server already saw")
+}
+
+// A Retry-After too large for a time.Duration used to wrap around - to -1s for
+// the largest int - so a hostile server could turn "wait forever" into "retry
+// now". It saturates instead, and DefaultRetryable gives up on it.
+func TestAnEnormousRetryAfterSaturates(t *testing.T) {
+	t.Parallel()
+
+	resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}}
+	resp.Header.Set("Retry-After", "9223372036854775807")
+
+	wait, ok := httpclient.ParseRetryAfter(resp)
+	require.True(t, ok)
+	require.Greater(t, wait, 24*time.Hour)
+	require.False(t, httpclient.DefaultRetryable(resp, nil))
 }

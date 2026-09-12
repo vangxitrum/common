@@ -8,7 +8,7 @@ import (
 )
 
 // errRedirect is what a refused redirect wraps, so a caller can tell one from a
-// transport failure and the retry layer knows not to try again.
+// transport failure and DefaultRetryable knows not to try again.
 var errRedirect = errors.New("redirect refused")
 
 // checkRedirect builds the policy http.Client applies between hops.
@@ -20,8 +20,9 @@ var errRedirect = errors.New("redirect refused")
 // to follow at all - and a refusal to be downgraded from https to http.
 //
 // Redirects are handled by http.Client, above the whole RoundTripper chain, so
-// a redirect chain produces one metrics sample per hop and a retry never
-// restarts the redirect count. Both are what you want and both surprise people.
+// a redirect chain produces one metrics sample per hop, and each attempt
+// Retry.Do makes is a new Client.Do with a redirect count of its own. Both are
+// what you want and both surprise people.
 func (config Config) checkRedirect() func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if config.MaxRedirects == 0 {

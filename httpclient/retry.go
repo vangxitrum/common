@@ -6,6 +6,11 @@ import (
 	"crypto/x509"
 	"errors"
 	"log/slog"
+	"math"
+
+	// math/rand, not crypto/rand, on purpose: jitter only has to differ
+	// between instances, not be unguessable. The module's no-math-rand lint
+	// rule exempts this file for exactly this use.
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -80,6 +85,11 @@ type Retry struct {
 // A response that was superseded by another attempt is drained, which keeps its
 // connection in the pool.
 //
+// The first attempt's Idempotency-Key is sent on every retry, whatever
+// newRequest builds later. A caller that generates the key inside newRequest
+// would otherwise send a new one each time, and the server would take the
+// retry of a POST that timed out after succeeding as a second request.
+//
 // Every attempt shares ctx, so a deadline on it covers them all, and a wait
 // that cannot be followed by an attempt before the deadline is not slept.
 func (r Retry) Do(
@@ -101,13 +111,21 @@ func (r Retry) Do(
 	}
 	name := monkit.NewSeriesTag("name", r.name())
 
+	var key string
 	for attempt := 0; ; attempt++ {
 		req, err := newRequest(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if attempt == 0 && !r.replayable(req) {
-			maxAttempts = 1
+		if attempt == 0 {
+			key = req.Header.Get("Idempotency-Key")
+			if !r.replayable(req) {
+				maxAttempts = 1
+			}
+		} else if key != "" {
+			// The server has seen the first key; only that one makes this a
+			// replay rather than a new request.
+			req.Header.Set("Idempotency-Key", key)
 		}
 
 		//nolint:bodyclose // a superseded response is drained below; the last one belongs to the caller
@@ -246,6 +264,12 @@ func ParseRetryAfter(resp *http.Response) (wait time.Duration, ok bool) {
 	if seconds, err := strconv.Atoi(value); err == nil {
 		if seconds < 0 {
 			return 0, false
+		}
+		if seconds > int(math.MaxInt64/int64(time.Second)) {
+			// Past what a Duration holds, the multiplication wraps - to -1s
+			// for the largest int, which would turn "wait forever" into "retry
+			// now". Saturate instead, so a Retryable sees it as too long.
+			return time.Duration(math.MaxInt64), true
 		}
 		return time.Duration(seconds) * time.Second, true
 	}

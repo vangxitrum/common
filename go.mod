@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rabbitmq/amqp091-go v1.14.0
 	github.com/redis/go-redis/v9 v9.22.0
+	github.com/resend/resend-go/v3 v3.10.1
 	github.com/shopspring/decimal v1.4.0
 	github.com/spacemonkeygo/monkit/v3 v3.0.24
 	github.com/spf13/cast v1.10.0

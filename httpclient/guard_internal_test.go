@@ -73,3 +73,32 @@ func TestWhichAddressesAreBlocked(t *testing.T) {
 		)
 	}
 }
+
+// An allowlist entry covers every spelling of the address it names. The block
+// check already looks through NAT64 and 6to4 to the IPv4 address inside; the
+// allowlist has to look at the same address, or an IPv6-only host behind NAT64
+// is refused traffic the operator explicitly allowed.
+func TestAnAllowedNetworkCoversItsEmbeddedForms(t *testing.T) {
+	t.Parallel()
+
+	g, err := Config{AllowedNetworks: []string{"10.20.0.0/16"}}.guard(false)
+	require.NoError(t, err)
+	require.NotNil(t, g)
+
+	for _, address := range []string{
+		"10.20.0.1:443",          // the plain form
+		"[64:ff9b::a14:1]:443",   // NAT64 of 10.20.0.1
+		"[2002:a14:1::1]:443",    // 6to4 of 10.20.0.1
+		"[::ffff:10.20.0.1]:443", // IPv4-mapped
+	} {
+		require.NoError(t, g.control("tcp", address, nil), "%s is inside the allowlist", address)
+	}
+
+	for _, address := range []string{
+		"10.21.0.1:443",
+		"[64:ff9b::a15:1]:443", // NAT64 of 10.21.0.1
+		"[2002:a15:1::1]:443",  // 6to4 of 10.21.0.1
+	} {
+		require.ErrorIs(t, g.control("tcp", address, nil), ErrBlockedAddress, "%s is outside the allowlist", address)
+	}
+}

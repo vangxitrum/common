@@ -170,8 +170,12 @@ func (g *guard) control(_, address string, _ syscall.RawConn) error {
 	if !blockedAddr(addr) {
 		return nil
 	}
+	// The block check looked through NAT64 and 6to4 to the IPv4 address
+	// inside, so the allowlist looks at that address too: an operator who
+	// allowed 10.20.0.0/16 allowed it however an IPv6-only host spells it.
+	inner, embedded := embeddedIPv4(addr)
 	for _, prefix := range g.allowed {
-		if prefix.Contains(addr) {
+		if prefix.Contains(addr) || (embedded && prefix.Contains(inner)) {
 			return nil
 		}
 	}
