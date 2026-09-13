@@ -211,7 +211,7 @@ This is the decision people get wrong most often, so it gets a table.
 | MFA recovery codes | `secret.NewCodes` | Crockford base32, folds what a person mistypes |
 | A token a verifier checks **without reaching your database** | [`jwt`](../jwt/README.md) | Self-describing, signed |
 | A database key or a correlation id | [`uuid`](../uuid/README.md) | Sortable, not a credential |
-| A password | bcrypt or argon2id, in your service | Needs a slow, tunable hash; none of the above |
+| A password | [`password`](../password/README.md) | argon2id at OWASP's floor, one derivation even for an unknown account, legacy bcrypt upgraded on login; none of the above is slow enough |
 
 **Default to `secret`, not `jwt`.** A JWT cannot be revoked before it expires,
 which is the price of the verifier not needing a lookup. If both ends already
@@ -221,6 +221,27 @@ another company's service.
 
 `uuid.New()` is UUIDv7: about 74 random bits behind a 48-bit millisecond
 timestamp. It is a database key and never a bearer token.
+
+## Security controls
+
+The controls from the OWASP cheat sheets that every service needs, none of
+which imports a web framework. A gin or echo service calls them from a few
+lines of middleware; each README has both.
+
+| Control | Use | Wire it |
+| --- | --- | --- |
+| The client's address behind a proxy | [`clientip`](../clientip/README.md) | `trusted-proxies` set to the load balancers, and gin's `SetTrustedProxies` / echo's `IPExtractor` from the same list |
+| Brute force on login, OTP, forgot-password | [`ratelimit`](../ratelimit/README.md) | before the user lookup; account, account+IP and IP keys; `Reset` the account keys on success |
+| Password storage | [`password`](../password/README.md) | `Check` on signup, `Verify` on login with `""` for an unknown account, rehash on `NeedsRehash` |
+| Security headers | [`httpsec`](../httpsec/README.md) | `Headers` on every response |
+| CORS | `httpsec.CORS` | the real allowlist; empty means off, never `*` with credentials. A service with a dashboard and SDK users needs one policy per route group: "One API, two audiences" in the httpsec README |
+| A sort from the query string | [`postgres.SortColumns`](../postgres/README.md) | the documented keys only; `ErrInvalidSort` is a 400 |
+| File uploads | [`upload`](../upload/README.md) | `LimitRequest` before `FormFile`, `Policy.Open`, store under a random id |
+| Secrets in logs | [`logging`](../logging/README.md) | on by default; `log.redact` for service-specific keys |
+| A container health check | [`debug.HealthCommand`](../stats/README.md) | pin `debug.addr`, add the subcommand, and the Dockerfile's `HEALTHCHECK` runs it |
+
+`internal/e2e/owasp_test.go` wires all of them into one `net/http` server and
+tests them from the outside; it is the shortest complete example.
 
 ## Testing against these packages
 
