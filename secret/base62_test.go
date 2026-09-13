@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/random"
 )
 
 func TestRandBase62Shape(t *testing.T) {
@@ -49,6 +51,16 @@ func TestRandBase62IsUnbiased(t *testing.T) {
 		chiSquare += d * d / expected
 	}
 	require.Less(t, chiSquare, 112.0, "distribution is not uniform (chi-square %.1f)", chiSquare)
+}
+
+// The alphabets here are the ones aioz-common/random samples from. A drift
+// between the two would mint keys whose checksum this package then rejects, or
+// codes outside the alphabet NormalizeCode folds into.
+func TestAlphabetsMatchRandom(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, base62Alphabet, string(random.Base62))
+	require.Equal(t, crockfordAlphabet, string(random.Crockford))
 }
 
 func TestIsBase62(t *testing.T) {

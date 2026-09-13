@@ -1,6 +1,10 @@
 package secret
 
-import "strings"
+import (
+	"strings"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/random"
+)
 
 const (
 	// CodeGroups is how many dash-separated groups a recovery code has.
@@ -77,16 +81,10 @@ func VerifyCode(typed string, stored Hash) bool {
 
 // randCrockford returns n random characters from the Crockford alphabet.
 //
-// The alphabet has exactly 32 characters, so a 5-bit slice of a random byte is
-// already uniform and no rejection sampling is needed.
+// It is aioz-common/random.String over the same alphabet. The alphabet has
+// exactly 32 characters, which divides 256, so no byte is ever rejected.
 func randCrockford(n int) string {
-	b := Bytes(max(n, MinBytes))
-
-	out := make([]byte, n)
-	for i := range n {
-		out[i] = crockfordAlphabet[b[i]&0x1f]
-	}
-	return string(out)
+	return random.String(n, random.Crockford)
 }
 
 // formatCode groups a code for a human to read off a screen or a card.

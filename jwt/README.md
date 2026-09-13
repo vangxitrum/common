@@ -108,33 +108,135 @@ it, a token minted for one of your services is accepted by every other service
 that trusts the same issuer, which turns a token leak in the least important
 service into a compromise of the most important one.
 
-## Rotating a key
+## Type your tokens
 
 ```go
-ring, err := jwt.NewRing(oldVerifier, newVerifier)  // each with ExpectKeyID
-claims, err := ring.Verify(ctx, presented)
+signer, err := jwt.NewKeySigner(jwt.EdDSA, private,
+    jwt.WithTTL(15*time.Minute),
+    jwt.WithType(jwt.TypeAccessToken),       // "typ": "at+jwt"
+)
+verifier, err := jwt.NewKeyVerifier(jwt.EdDSA, public,
+    jwt.RequireAudience("api"),
+    jwt.RequireType(jwt.TypeAccessToken),
+)
 ```
 
-Publish the new key to every verifier first, then start signing with it. Tokens
-minted under the old key keep verifying until they expire, and only then is the
-old key removed. Without a ring, rotation invalidates every token already in
-flight.
+A signature proves who minted a token, not what it was minted for. An issuer
+that signs ID tokens, refresh tokens or internal tokens with the same key as
+its access tokens hands an attacker a supply of validly signed tokens that
+carry every claim an access token needs; without a type check, an API accepts
+any of them (RFC 8725 §3.11). `RequireType` refuses a token whose `typ` header
+is missing or different. `TypeAccessToken` is the `at+jwt` type of RFC 9068,
+the JWT profile for OAuth 2.0 access tokens.
+
+The comparison ignores case and an `application/` prefix on either side, as RFC
+7515 §4.1.9 allows, so `at+jwt` and `application/AT+JWT` are the same type.
+Without `WithType` every token says `JWT`, which is what every other JWT
+library stamps too, and is exactly the value an access-token verifier should
+refuse. A `Ring` member built with `RequireType` enforces it through the ring.
+
+## Rotating a key
+
+Keep the keys as PEM files in one directory and load them with
+`LoadKeyRing`. The file names are the only configuration: one names the
+active key, and every key in the directory verifies.
+
+```go
+keys, err := jwt.LoadKeyRing("/etc/coord/jwt", cfg.ActiveKey, jwt.KeyRingOptions{
+    Signer:   []jwt.SignerOption{jwt.WithTTL(15 * time.Minute), jwt.WithType(jwt.TypeAccessToken)},
+    Verifier: []jwt.VerifierOption{jwt.RequireAudience("api"), jwt.RequireType(jwt.TypeAccessToken)},
+})
+for _, name := range keys.Skipped() {
+    slog.Warn("not a key file", "name", name)
+}
+for _, k := range keys.Keys() {
+    if k.LoosePermissions {
+        slog.Warn("private key is readable by group or other", "path", k.Path)
+    }
+}
+
+token, err := keys.Signer().Sign(ctx, jwt.Claims{Subject: "user-1"})
+claims, err := keys.Ring().Verify(ctx, presented)
+```
+
+The directory is flat:
+
+| File | What it is |
+| --- | --- |
+| `<name>.pem` | a private key, PKCS#8 or RSA PKCS#1. It signs when it is the active key, and its public half verifies either way. |
+| `<name>.pub.pem` | a public key only, PKIX or RSA PKCS#1. It verifies and never signs. |
+| `.*` | ignored, which covers the `..data` symlinks of a Kubernetes secret mount. |
+| anything else | ignored, and listed in `Skipped()` so a key saved as `new.key` by mistake is not silently missing. |
+
+Keys are Ed25519 (`EdDSA`) or RSA of at least 2048 bits (`RS256`); anything
+else fails the load, naming the file. So does a missing directory, an empty
+one, an active name with no `<name>.pem`, and a `<name>.pem` and
+`<name>.pub.pem` that hold different keys.
+
+A rotation is three steps, each a file change and a restart, and each one
+finished on every replica before the next begins:
+
+1. **Publish.** Add `new.pem` next to `old.pem`, still active `old`. Every
+   replica now verifies tokens from the new key, though none mints them yet.
+2. **Switch.** Change the active name to `new`. Replicas mint with the new key,
+   and tokens minted under the old one keep verifying, because `old.pem` is
+   still in the directory.
+3. **Retire.** Once the longest TTL has passed since the switch, delete
+   `old.pem`. Its tokens are now refused as an unknown kid.
+
+The order is the point. Switching before publishing means a replica that has
+not restarted yet refuses every token the new key signs. Retiring before the
+TTL has passed logs out everyone holding a token from the old key. To stop
+signing with a key while its tokens still verify - it is leaving a machine,
+say - replace `old.pem` with `old.pub.pem` and delete that at the end of the
+TTL instead.
 
 Two things about the `kid`:
 
-- **Set it from the first day.** Adding one later means every already-issued
-  token lacks it, so the rotation you wanted the header for is exactly the
-  moment it is not there.
+- **It is the key's RFC 7638 thumbprint**, not a name anyone chose. Every
+  replica computes the same kid for the same key with no coordination, a
+  renamed or copied file is still the same key (and merges into one ring
+  member), and two different keys cannot collide. The file name is for people,
+  the kid is for tokens.
 - **A kid is routing, never trust.** `Ring.Verify` reads the header without
   verifying it, because the key needed to verify is what the header selects.
   That is safe only because a kid chooses among keys already trusted: an
   unknown kid is rejected, and the chosen verifier still checks the signature
-  and the pinned algorithm. Naming a known kid does not skip anything, and a
-  test asserts it.
+  and the pinned algorithm. Naming a known kid while signing with another key
+  gets nowhere, and a test asserts it.
+
+Keys are made by the service, not by hand with `openssl`: ship a `genkey`
+command built on `GenerateKey`, `WritePrivateKey` and `WritePublicKey`. It
+writes `<name>.pem` with mode 0600 and `<name>.pub.pem` with 0644, refuses to
+overwrite an existing file, since that file may be the only copy of a key
+whose tokens are still in flight, and refuses a name `LoadKeyRing` would not
+read back.
+
+```go
+key, err := jwt.GenerateKey(jwt.KeyTypeEd25519, 0)
+info, err := jwt.WritePrivateKey(dir, "2026-09", key)
+_, err = jwt.WritePublicKey(publicDir, "2026-09", key.Public())
+fmt.Println(info.Path, info.ID)
+```
+
+`KeyRing.DeriveSecret(info)` turns the active key into 32 bytes of HKDF-SHA256
+output, for a service that needs a symmetric secret - a cookie key, a CSRF key
+- and would rather not provision a second one. It is the same on every replica
+and changes when the active key does, so whatever it protects rotates with the
+signing key. Use a different `info` for each purpose.
+
+Rings built by hand still work for keys that do not live in files:
+
+```go
+ring, err := jwt.NewRing(oldVerifier, newVerifier)  // each with ExpectKeyID
+```
 
 `NewRing` requires a kid on every member rather than falling back to "try them
 all", because a ring that tries every key accepts a token signed by any key it
-has ever known and hides the fact that the old one was never retired.
+has ever known and hides the fact that the old one was never retired. Set a kid
+from the first day: adding one later means every already-issued token lacks
+it, so the rotation you wanted the header for is exactly the moment it is not
+there.
 
 ## Testing
 
@@ -153,8 +255,8 @@ _, err := verifier.Verify(ctx, token.Reveal())  // expired
 ## Not in scope
 
 No JWKS endpoint or fetcher, no refresh-token flow, no revocation list, no
-encryption (JWE). Key material comes from the caller, in whatever form it
-already stores keys.
+encryption (JWE). Key material comes from the caller, either as keys it already
+holds or as a directory of PEM files for `LoadKeyRing`.
 
 ## API
 
@@ -188,8 +290,39 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Claims, error)
 func NewRing(verifiers ...*Verifier) (*Ring, error)
 func (r *Ring) Verify(ctx context.Context, token string) (Claims, error)
 
-// SignerOption:   WithKeyID, WithIssuer, WithAudience, WithTTL,
+const TypeAccessToken = "at+jwt"
+
+type KeyInfo struct {
+    Name, ID, Path   string
+    Alg              Algorithm
+    Private, Active  bool
+    LoosePermissions bool
+}
+type KeyRingOptions struct {
+    Signer   []SignerOption
+    Verifier []VerifierOption
+}
+func LoadKeyRing(dir, active string, opts KeyRingOptions) (*KeyRing, error)
+func (k *KeyRing) Signer() *Signer
+func (k *KeyRing) Ring() *Ring
+func (k *KeyRing) Keys() []KeyInfo
+func (k *KeyRing) Active() KeyInfo
+func (k *KeyRing) Skipped() []string
+func (k *KeyRing) DeriveSecret(info string) []byte
+
+func Thumbprint(pub crypto.PublicKey) (string, error)
+func AlgorithmFor(pub crypto.PublicKey) (Algorithm, error)
+func ParsePrivateKeyPEM(b []byte) (crypto.Signer, error)
+func ParsePublicKeyPEM(b []byte) (crypto.PublicKey, error)
+
+type KeyType string
+const KeyTypeEd25519, KeyTypeRSA KeyType
+func GenerateKey(kind KeyType, rsaBits int) (crypto.Signer, error)
+func WritePrivateKey(dir, name string, key crypto.Signer) (KeyInfo, error)
+func WritePublicKey(dir, name string, pub crypto.PublicKey) (KeyInfo, error)
+
+// SignerOption:   WithKeyID, WithType, WithIssuer, WithAudience, WithTTL,
 //                 AllowTokensThatNeverExpire
-// VerifierOption: ExpectKeyID, RequireIssuer, RequireAudience, WithLeeway,
-//                 AcceptTokensThatNeverExpire
+// VerifierOption: ExpectKeyID, RequireType, RequireIssuer, RequireAudience,
+//                 WithLeeway, AcceptTokensThatNeverExpire
 ```

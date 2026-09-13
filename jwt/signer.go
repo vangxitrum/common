@@ -18,6 +18,7 @@ type Signer struct {
 	alg   Algorithm
 	key   any
 	keyID string
+	typ   string
 
 	issuer        string
 	audience      []string
@@ -35,6 +36,15 @@ type SignerOption func(*Signer)
 // wanted the header for is exactly the moment it is not there.
 func WithKeyID(id string) SignerOption {
 	return func(s *Signer) { s.keyID = id }
+}
+
+// WithType sets the "typ" header, which says what kind of token this is.
+//
+// Use [TypeAccessToken] for an access token. Without an explicit type every
+// token this package mints says "JWT", so a verifier cannot tell an access
+// token from any other token the same key signs; see [RequireType].
+func WithType(typ string) SignerOption {
+	return func(s *Signer) { s.typ = typ }
 }
 
 // WithIssuer sets the "iss" claim on every token this Signer mints.
@@ -157,6 +167,9 @@ func (s *Signer) Sign(ctx context.Context, claims Claims) (secret.Token, error) 
 	token := gojwt.NewWithClaims(gojwt.GetSigningMethod(string(s.alg)), mapped)
 	if s.keyID != "" {
 		token.Header["kid"] = s.keyID
+	}
+	if s.typ != "" {
+		token.Header["typ"] = s.typ
 	}
 
 	signed, err := token.SignedString(s.key)

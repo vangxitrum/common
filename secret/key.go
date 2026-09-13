@@ -22,6 +22,9 @@ const (
 	// KeyPrefixMaxLen is the longest accepted prefix.
 	KeyPrefixMaxLen = 12
 
+	// KeyHintLen is how many trailing characters [Key.Hint] shows.
+	KeyHintLen = 4
+
 	keySeparator = "_"
 )
 
@@ -47,6 +50,10 @@ type Key struct {
 type KeyRef struct {
 	Prefix string `json:"prefix"`
 	ID     string `json:"id"`
+
+	// Hint is the presented key's [Key.Hint], for showing which key a
+	// request used.
+	Hint string `json:"hint"`
 }
 
 // NewKey mints a key under prefix.
@@ -117,7 +124,7 @@ func ParseKey(s string) (KeyRef, error) {
 		return KeyRef{}, Error.Errorf("key checksum does not match")
 	}
 
-	return KeyRef{Prefix: prefix, ID: rest[:KeyIDLen]}, nil
+	return KeyRef{Prefix: prefix, ID: rest[:KeyIDLen], Hint: hint(prefix, s)}, nil
 }
 
 // validatePrefix enforces lowercase alphanumerics, so the prefix is one word,
@@ -137,4 +144,25 @@ func validatePrefix(prefix string) error {
 		}
 	}
 	return nil
+}
+
+// Hint is how a dashboard shows this key after the owner has saved it: the
+// prefix and the last [KeyHintLen] characters, "aioz_...w2Qe", the way Stripe
+// and OpenAI show keys.
+//
+// Compute it when the key is minted and store it next to the id and the hash:
+// the hash cannot give it back later. It is safe to store, log and display.
+//
+// The last characters are part of the checksum, which is computed from the
+// secret, so a hint gives away about 24 bits of information about it. That
+// leaves over 230 bits unknown, still far beyond guessing. And a hint is a
+// label, not an identifier: 62^4 is about 15 million, so two keys can share
+// one. Never look a key up, or accept one, by its hint.
+func (k Key) Hint() string {
+	return hint(k.Prefix, k.Secret.Reveal())
+}
+
+// hint builds the display form of a presented key.
+func hint(prefix, presented string) string {
+	return prefix + keySeparator + "..." + presented[len(presented)-KeyHintLen:]
 }

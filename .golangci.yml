@@ -76,6 +76,21 @@ linters:
               desc: "disallowed logger; use log/slog"
             - pkg: "k8s.io/klog/v2"
               desc: "disallowed logger; use log/slog"
+        # token-security.md: codes and secrets come from a CSPRNG. math/rand
+        # is allowed only in tests and in the two retry-jitter sites, where a
+        # value only has to differ between instances, not be unguessable.
+        no-math-rand:
+          list-mode: lax
+          files:
+            - $all
+            - "!$test"
+            - "!**/retry/retry.go"
+            - "!**/httpclient/retry.go"
+          deny:
+            - pkg: "math/rand$"
+              desc: "not a CSPRNG; use aioz-common/random (or aioz-common/secret for tokens)"
+            - pkg: "math/rand/v2"
+              desc: "not a CSPRNG; use aioz-common/random (or aioz-common/secret for tokens)"
 
     gocritic:
       enabled-checks:

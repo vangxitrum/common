@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+Two `jwt` additions: a key ring loaded from a directory of PEM files, so
+rotating a key is a file change on each replica, and the `typ` header, so an
+access token cannot be confused with another token from the same issuer.
+
+### Added
+
+**`jwt.LoadKeyRing`** - reads every `<name>.pem` (private) and
+`<name>.pub.pem` (public only) in a directory and returns a `KeyRing`: a
+`Signer` for the named active key and a `Ring` over every key. The kid is the
+key's RFC 7638 thumbprint (`jwt.Thumbprint`), so replicas agree on it with no
+coordination and the same key under two names is one ring member. Keys are
+Ed25519 or RSA of at least 2048 bits, and every load error names the file.
+Dotfiles, including a Kubernetes mount's `..data`, are ignored; other unknown
+files are reported by `Skipped`, and a private key readable by group or other
+is flagged in `KeyInfo.LoosePermissions`. `DeriveSecret` derives a symmetric
+secret from the active key with HKDF-SHA256. `ParsePrivateKeyPEM`,
+`ParsePublicKeyPEM` and `AlgorithmFor` are exported for callers that hold keys
+elsewhere. See "Rotating a key" in [`jwt/README.md`](jwt/README.md).
+
+**`jwt.GenerateKey`, `WritePrivateKey`, `WritePublicKey`** - the pieces of a
+service's `genkey` command. Files are written with modes 0600 and 0644, never
+over an existing file, and only under a name `LoadKeyRing` reads back.
+
+**`jwt.WithType` and `jwt.RequireType`** - stamp and require the `typ` header,
+with `jwt.TypeAccessToken` (`at+jwt`, RFC 9068). A verifier with `RequireType`
+refuses a token whose type is missing or different, which stops an ID token or
+any other token signed by the same key from passing as an access token (RFC
+8725 §3.11). The comparison ignores case and an `application/` prefix.
+
 ## v0.3.1 (2026-09-11)
 
 Release note: [`.gitlab/releases/v0.3.1.md`](.gitlab/releases/v0.3.1.md).

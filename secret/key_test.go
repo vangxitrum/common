@@ -199,3 +199,46 @@ func TestKeyItselfRefusesToMarshal(t *testing.T) {
 	_, err = json.Marshal(key)
 	require.Error(t, err)
 }
+
+// A hint lets a person tell their keys apart in a dashboard - the prefix and
+// the last four characters, the way Stripe and OpenAI show keys - without the
+// dashboard ever holding the key.
+func TestKeyHintShowsThePrefixAndTheLastFour(t *testing.T) {
+	t.Parallel()
+
+	key, err := secret.NewKey(testPrefix)
+	require.NoError(t, err)
+	presented := key.Secret.Reveal()
+
+	hint := key.Hint()
+	require.Equal(t, testPrefix+"_..."+presented[len(presented)-secret.KeyHintLen:], hint)
+	require.Len(t, hint, len(testPrefix)+len("_...")+secret.KeyHintLen)
+	require.NotContains(t, hint, key.ID, "the hint shows the tail, not the lookup id")
+}
+
+// ParseKey returns the hint too, so a service can say which key a request
+// used from the presented string alone.
+func TestParseKeyReturnsTheHint(t *testing.T) {
+	t.Parallel()
+
+	key, err := secret.NewKey(testPrefix)
+	require.NoError(t, err)
+
+	ref, err := secret.ParseKey(key.Secret.Reveal())
+	require.NoError(t, err)
+	require.Equal(t, key.Hint(), ref.Hint)
+}
+
+// The hint is meant to be stored and shown, so unlike the Token it marshals.
+func TestKeyRefWithHintMarshals(t *testing.T) {
+	t.Parallel()
+
+	key, err := secret.NewKey(testPrefix)
+	require.NoError(t, err)
+	ref, err := secret.ParseKey(key.Secret.Reveal())
+	require.NoError(t, err)
+
+	b, err := json.Marshal(ref)
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"hint":"`+key.Hint()+`"`)
+}
