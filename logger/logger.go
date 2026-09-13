@@ -23,6 +23,13 @@ type Config struct {
 	// AddSource includes caller file:line in every record.
 	AddSource bool
 
+	// ReplaceAttr, if set, rewrites or drops each attribute before it is
+	// written anywhere: stdout, file or Graylog. It sees attributes from every
+	// source - WithAttrs, the context and the record - with their group path,
+	// as slog.HandlerOptions.ReplaceAttr does; an Attr with an empty Key is
+	// dropped. logging.RedactAttr is the one services use.
+	ReplaceAttr func(groups []string, a slog.Attr) slog.Attr
+
 	// AsyncBufferSize is the record channel capacity for non-blocking dispatch.
 	// 0 is treated as 4096. When full, new records are dropped.
 	AsyncBufferSize int
@@ -74,7 +81,9 @@ func New(cfg Config) (*Handler, error) {
 		sinks = append(sinks, newGraylogSink(*cfg.Graylog))
 	}
 
-	var h slog.Handler = newConsoleHandler(cfg.Level, cfg.Format, cfg.AddSource, sinks)
+	console := newConsoleHandler(cfg.Level, cfg.Format, cfg.AddSource, sinks)
+	console.replace = cfg.ReplaceAttr
+	var h slog.Handler = console
 
 	if cfg.Sampling != nil {
 		h = newSamplingHandler(h, *cfg.Sampling)

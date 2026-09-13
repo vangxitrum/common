@@ -32,6 +32,10 @@ type consoleHandler struct {
 	mu       *sync.Mutex // shared across clones to serialize stdout writes
 	preAttrs []slog.Attr
 	groups   []string
+
+	// replace is Config.ReplaceAttr, applied to every attribute before it
+	// reaches stdout or a sink.
+	replace func(groups []string, a slog.Attr) slog.Attr
 }
 
 func newConsoleHandler(level slog.Leveler, format Format, addSource bool, sinks []Sink) *consoleHandler {
@@ -81,23 +85,23 @@ func (h *consoleHandler) WithGroup(name string) slog.Handler {
 func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	attrs := make(map[string]any, len(h.preAttrs)+r.NumAttrs()+4)
 
-	collectAttrs(attrs, h.preAttrs, "")
+	// All three sources go through collect, so ReplaceAttr sees every
+	// attribute: a handler wrapped around this one could not, because the
+	// context attributes are only read here.
+	h.collect(attrs, h.preAttrs, "", nil)
 
 	if ctxAttrs, ok := ctx.Value(ctxKey{}).([]slog.Attr); ok {
-		collectAttrs(attrs, ctxAttrs, "")
+		h.collect(attrs, ctxAttrs, "", nil)
 	}
 
 	prefix := ""
+	var groups []string
 	if len(h.groups) > 0 {
 		prefix = strings.Join(h.groups, ".") + "."
+		groups = h.groups
 	}
 	r.Attrs(func(a slog.Attr) bool {
-		a.Value = a.Value.Resolve()
-		if a.Value.Kind() == slog.KindGroup {
-			collectAttrs(attrs, a.Value.Group(), prefix+a.Key+".")
-		} else {
-			attrs[prefix+a.Key] = a.Value.Any()
-		}
+		h.collectAttr(attrs, a, prefix, groups)
 		return true
 	})
 
@@ -200,15 +204,29 @@ func levelColor(level slog.Level) string {
 	}
 }
 
-func collectAttrs(dst map[string]any, attrs []slog.Attr, prefix string) {
+// collect flattens attrs into dst under prefix. groups is the same path as a
+// slice, for ReplaceAttr.
+func (h *consoleHandler) collect(dst map[string]any, attrs []slog.Attr, prefix string, groups []string) {
 	for _, a := range attrs {
-		a.Value = a.Value.Resolve()
-		if a.Value.Kind() == slog.KindGroup {
-			collectAttrs(dst, a.Value.Group(), prefix+a.Key+".")
-		} else {
-			dst[prefix+a.Key] = a.Value.Any()
-		}
+		h.collectAttr(dst, a, prefix, groups)
 	}
+}
+
+func (h *consoleHandler) collectAttr(dst map[string]any, a slog.Attr, prefix string, groups []string) {
+	a.Value = a.Value.Resolve()
+	if a.Value.Kind() == slog.KindGroup {
+		// The three-index slice makes append copy, so sibling groups never
+		// share a backing array.
+		h.collect(dst, a.Value.Group(), prefix+a.Key+".", append(groups[:len(groups):len(groups)], a.Key))
+		return
+	}
+	if h.replace != nil {
+		if a = h.replace(groups, a); a.Key == "" {
+			return
+		}
+		a.Value = a.Value.Resolve()
+	}
+	dst[prefix+a.Key] = a.Value.Any()
 }
 
 func attrsToAny(attrs []slog.Attr) []any {
