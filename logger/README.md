@@ -80,6 +80,12 @@ logger.Config{
     // Include caller file:line in every record.
     AddSource: false,
 
+    // Optional: rewrite or drop each attribute before any output sees it.
+    // Applied to attributes from With, the context and the record alike,
+    // with their group path; an empty Key drops the attribute.
+    // logging.New installs logging.RedactAttr here.
+    ReplaceAttr: logging.RedactAttr(),
+
     // Channel capacity for async dispatch. 0 → 4096.
     // Records are dropped (never blocked) when the channel is full.
     AsyncBufferSize: 4096,

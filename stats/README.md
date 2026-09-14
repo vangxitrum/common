@@ -37,13 +37,13 @@ func FetchUser(ctx context.Context, id string) (_ *User, err error) {
 
 `mon.Task()` records for every call:
 
-| Metric field | Meaning |
-|---|---|
-| `success_count` | number of error-free calls |
-| `error_count` | number of calls that returned a non-nil error |
-| `panics` | number of panics recovered |
-| `success_times` p50/p95/p99/max | latency distribution for successful calls |
-| `failure_times` p50/p95/p99/max | latency distribution for failed calls |
+| Metric field                    | Meaning                                       |
+| ------------------------------- | --------------------------------------------- |
+| `success_count`                 | number of error-free calls                    |
+| `error_count`                   | number of calls that returned a non-nil error |
+| `panics`                        | number of panics recovered                    |
+| `success_times` p50/p95/p99/max | latency distribution for successful calls     |
+| `failure_times` p50/p95/p99/max | latency distribution for failed calls         |
 
 ---
 
@@ -161,7 +161,7 @@ Two traps, both of which earlier versions of this document walked into:
   **silently drops it** - no error, no value. The targets above are package
   level variables for exactly this reason.
 - **Use `--abbrev=0`.** Bare `git describe` yields `v2.4.1-3-gabc1234`, which
-  semver reads as a *prerelease of* v2.4.1, so a build three commits past the
+  semver reads as a _prerelease of_ v2.4.1, so a build three commits past the
   tag sorts below it. See [`version`](../version/README.md).
 
 To surface the build stamp in `/metrics` as well as on `/version/`:
@@ -174,21 +174,48 @@ version.Register(nil)   // nil means monkit.Default
 
 ## Endpoints reference
 
-| Endpoint | Description |
-|---|---|
-| `GET /` | HTML index of all endpoints |
-| `GET /health` | Returns `OK` — use as liveness probe |
-| `GET /version/` | Build stamp JSON, from [`version`](../version/README.md) |
-| `GET /metrics` | Monkit stats in Prometheus exposition format |
-| `GET /mon/` | Interactive monkit stats browser |
-| `GET /top` | HTTP request counts per path, ranked by frequency |
-| `GET /debug/pprof/` | pprof index |
-| `GET /debug/pprof/profile?seconds=30` | CPU profile |
-| `GET /debug/pprof/heap` | Heap snapshot |
-| `GET /debug/pprof/goroutine` | Goroutine dump |
-| `GET /debug/pprof/trace?seconds=5` | Execution trace |
-| `GET /logging` | Read current log level |
-| `PUT /logging` | Change log level at runtime |
+| Endpoint                              | Description                                              |
+| ------------------------------------- | -------------------------------------------------------- |
+| `GET /`                               | HTML index of all endpoints                              |
+| `GET /health`                         | Returns `OK` — use as liveness probe                     |
+| `GET /version/`                       | Build stamp JSON, from [`version`](../version/README.md) |
+| `GET /metrics`                        | Monkit stats in Prometheus exposition format             |
+| `GET /mon/`                           | Interactive monkit stats browser                         |
+| `GET /top`                            | HTTP request counts per path, ranked by frequency        |
+| `GET /debug/pprof/`                   | pprof index                                              |
+| `GET /debug/pprof/profile?seconds=30` | CPU profile                                              |
+| `GET /debug/pprof/heap`               | Heap snapshot                                            |
+| `GET /debug/pprof/goroutine`          | Goroutine dump                                           |
+| `GET /debug/pprof/trace?seconds=5`    | Execution trace                                          |
+| `GET /logging`                        | Read current log level                                   |
+| `PUT /logging`                        | Change log level at runtime                              |
+
+---
+
+## Container health check
+
+A distroless image has no shell and no `curl`, so a Docker `HEALTHCHECK` has
+nothing to run unless the service can check itself. `debug.HealthCommand` is a
+`healthcheck` subcommand that GETs `/health` and exits 1 unless it answers 200:
+
+```go
+root.AddCommand(debug.HealthCommand("http://127.0.0.1:9002/health"))
+```
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/usr/local/bin/service", "healthcheck"]
+```
+
+- **Pin the debug address.** `debug.addr` defaults to `127.0.0.1:0`, a random
+  port no health check can find; set it (`127.0.0.1:9002`) and pass the same
+  URL here. Loopback is enough: the check runs inside the container.
+- `--url` and `--timeout` (default 3s) override the defaults at the call site.
+- The check ignores `HTTP_PROXY` and does not follow redirects.
+- `debug.CheckHealth(ctx, url, timeout)` is the same check as a function.
+
+The [team-playbook Docker template](https://gitlab.internal/tuan.quang.tran/team-playbook/-/tree/main/templates/docker)
+runs it.
 
 ---
 
@@ -201,7 +228,7 @@ scrape_configs:
   - job_name: my-service
     static_configs:
       - targets:
-          - my-service-host:6060   # debug server address
+          - my-service-host:6060 # debug server address
     metrics_path: /metrics
     scrape_interval: 15s
 ```
@@ -225,45 +252,50 @@ mypackage_myfunc{scope="mypackage",kind="error_count",field="count"} 3
 
 ### 1. Add Prometheus as a data source
 
-In Grafana → **Connections → Data sources → Add data source → Prometheus**.  
+In Grafana → **Connections → Data sources → Add data source → Prometheus**.
 Set the URL to your Prometheus server (e.g. `http://prometheus:9090`).
 
 ### 2. Useful PromQL queries
 
 **p99 latency for a function (seconds):**
+
 ```promql
 mypackage_myfunc{field="p99"}
 ```
 
 **p95 latency across all functions in a package:**
+
 ```promql
 {scope="mypackage", field="p95"}
 ```
 
 **Error rate (errors per second):**
+
 ```promql
 rate(mypackage_myfunc{kind="error_count"}[1m])
 ```
 
 **Throughput (calls per second):**
+
 ```promql
 rate(mypackage_myfunc{kind="success_count"}[1m])
 ```
 
 **Top slowest p99 functions:**
+
 ```promql
 topk(10, {field="p99"})
 ```
 
 ### 3. Recommended dashboard panels
 
-| Panel type | Query | Title |
-|---|---|---|
-| Time series | `{scope="mypackage", field="p99"}` | p99 latency |
-| Time series | `{scope="mypackage", field="p95"}` | p95 latency |
-| Stat | `rate(mypackage_myfunc{kind="error_count"}[5m])` | Error rate |
-| Bar gauge | `topk(10, {field="p99"})` | Slowest functions |
-| Time series | `rate({kind="success_count"}[1m])` | Throughput (req/s) |
+| Panel type  | Query                                            | Title              |
+| ----------- | ------------------------------------------------ | ------------------ |
+| Time series | `{scope="mypackage", field="p99"}`               | p99 latency        |
+| Time series | `{scope="mypackage", field="p95"}`               | p95 latency        |
+| Stat        | `rate(mypackage_myfunc{kind="error_count"}[5m])` | Error rate         |
+| Bar gauge   | `topk(10, {field="p99"})`                        | Slowest functions  |
+| Time series | `rate({kind="success_count"}[1m])`               | Throughput (req/s) |
 
 ### 4. Alerting example
 

@@ -27,8 +27,8 @@
 // database key, not a bearer token.
 //
 // This is also the wrong package for anything a human chose. A password needs
-// a slow, tunable hash (bcrypt, argon2id) and belongs in the service that
-// authenticates it; nothing here takes a parameter named password, and
+// a slow, tunable hash and a length policy counted in characters: use
+// aioz-common/password. Nothing here takes a parameter named password, and
 // [MinBytes] refuses any length a person could have typed.
 package secret
 

@@ -23,6 +23,8 @@ type Config struct {
 	AddSource       bool   `help:"annotate records with source file:line" default:"false" devDefault:"true"`
 	AsyncBufferSize int    `help:"records buffered before dropping starts" default:"4096"`
 
+	Redact []string `help:"attribute keys whose values are logged as [redacted], beyond the built-in password, token, authorization, cookie and api_key family" default:""`
+
 	File     FileConfig
 	Graylog  GraylogConfig
 	Sampling SamplingConfig
@@ -145,7 +147,8 @@ func (c Config) Validate() error {
 // the logger that config file is supposed to configure.
 func Bootstrap() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level:       slog.LevelInfo,
+		ReplaceAttr: RedactAttr(),
 	}))
 }
 
@@ -173,6 +176,7 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 		Format:          format,
 		AddSource:       cfg.AddSource,
 		AsyncBufferSize: cfg.AsyncBufferSize,
+		ReplaceAttr:     RedactAttr(cfg.Redact...),
 	}
 
 	if cfg.File.Enabled {

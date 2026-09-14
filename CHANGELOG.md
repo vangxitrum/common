@@ -6,7 +6,90 @@ Two `jwt` additions: a key ring loaded from a directory of PEM files, so
 rotating a key is a file change on each replica, and the `typ` header, so an
 access token cannot be confused with another token from the same issuer.
 
+And the server-side controls from the OWASP cheat sheets that every service
+was missing: the real client address behind a proxy, a rate limiter shared by
+every replica, one way to store passwords, and security headers with a CORS
+policy that is off until it is configured.
+
 ### Added
+
+**`clientip`** - the address a request really came from. `X-Forwarded-For` is
+walked from the right past a configured list of trusted proxies, so a client
+cannot choose the address it is limited and logged by; with no trusted proxies
+no header is read. `X-Real-IP` is used only when there is exactly one. `New`
+refuses `0.0.0.0/0`, `::/0` and the RFC 7239 `Forwarded` header. The README
+wires it into gin and echo. See [`clientip/README.md`](clientip/README.md).
+
+**`ratelimit`** - GCRA windows in Redis (`ratelimit.WithRedis`), checked
+atomically by one Lua script, or in memory with no option, for single replicas
+and tests. On a Redis shared by several services, each sets its own `Prefix`,
+and the server must run `noeviction`. A denied request
+consumes nothing, so hammering a victim's key cannot lock them out; a long
+window behind a short one is the progressive delay. `Result.RetryAfter` is
+exact. Keys are hashed (no email or address in Redis), and an IPv6 client is
+keyed by its /64. Every Redis call is bounded by `Timeout`, even against a
+server that never answers, and a failure applies `OnError`: `local` (memory,
+the default), `open` or `closed`. The README has the login, forgot-password
+and OTP recipe. See [`ratelimit/README.md`](ratelimit/README.md).
+
+**`password`** - argon2id password storage to OWASP's Password Storage cheat
+sheet and NIST SP 800-63B. `New` refuses parameters below OWASP's argon2id
+floor (19 MiB at 2 iterations is the default); hashes are PHC strings, decoded
+strictly. `Verify` costs one derivation on every path, including an unknown
+account, which is checked against a dummy hash, and compares in constant time.
+Legacy bcrypt hashes verify against the raw input and, like argon2id hashes
+with other parameters, report `NeedsRehash`. Passwords are NFC-normalized, and
+`Check` counts characters after NFC with a minimum of 15. At most
+`MaxConcurrent` derivations hold memory at once. See
+[`password/README.md`](password/README.md).
+
+**`httpsec`** - the OWASP HTTP Headers, HSTS and CORS cheat sheets, with no
+framework. `Headers` sets the OWASP set (a no-HTML CSP, HSTS for two years
+with subdomains, nosniff, `DENY` framing, a strict referrer policy, COOP,
+CORP, a permissions policy, `no-store`) before the handler runs, so a handler
+can still override one. `CORS` is off when no origins are configured; exact
+origins and `https://*.example.com` subdomain wildcards match strictly, and
+`NewCORS` refuses `*` with credentials, `null`, paths and TLD wildcards.
+`Vary: Origin` is added, never set; configured lists are sent, never the
+request's echoed; every preflight gets a 204 without reaching a handler. Both
+have a stdlib `Wrap`; the README has the gin and echo middleware. See
+[`httpsec/README.md`](httpsec/README.md).
+
+**`postgres.SortColumns`** - an allowlist from the sort keys an endpoint
+documents to the columns they order by, since `ORDER BY` cannot take a bind
+parameter. `OrderBy(key, direction)` matches the key exactly, accepts `asc` or
+`desc`, quotes the column as an identifier, and returns
+`postgres.ErrInvalidSort` (a 400) for anything else. See "A sort chosen by the
+request goes through an allowlist" in [`postgres/README.md`](postgres/README.md).
+
+**Log redaction** - `logging.New` and `logging.Bootstrap` now log the value of
+a sensitive attribute as `[redacted]`: `password`, `secret`, `token`,
+`authorization`, `cookie`, `api_key` and their relatives, matched exactly
+after lowercasing and turning `-` into `_`, and everything under a group of
+that name. `logging.Config.Redact` adds keys; `logging.RedactAttr` and
+`logging.RedactKeys` are exported for handlers built by hand. Underneath,
+`logger.Config.ReplaceAttr` is new and is applied inside the handler to
+attributes from `With`, from the context and from the record alike, before
+stdout, file or Graylog. It is a safety net: values inside headers, structs
+and bodies are not inspected, and `secret.Token` remains the control.
+
+**`upload`** - the OWASP File Upload cheat sheet for a form file. A `Policy`
+accepts a file only when its extension and its sniffed content name the same
+allowed `Type` (`PNG`, `JPEG`, `JPG`, `GIF`, `WebP`); the client's
+`Content-Type` is never read, empty files are refused, and SVG, HTML and other
+active content can never be allowed. The returned `File` replays the sniffed
+bytes and fails with `ErrTooLarge` past `MaxBytes` instead of truncating.
+`DisplayName` reduces a client's filename to one safe to show and log, and
+`LimitRequest` caps the body before anything parses it. See
+[`upload/README.md`](upload/README.md).
+
+**`debug.HealthCommand`** - a `healthcheck` subcommand that GETs the debug
+server's `/health` and exits non-zero unless it answers 200, for a container
+`HEALTHCHECK` in a distroless image that has no shell or `curl`. It ignores
+proxy settings, follows no redirects and gives up after `--timeout`;
+`debug.CheckHealth` is the same check as a function. The debug address must
+be pinned for it to find: `debug.addr` defaults to a random port. See
+"Container health check" in [`stats/README.md`](stats/README.md).
 
 **`jwt.LoadKeyRing`** - reads every `<name>.pem` (private) and
 `<name>.pub.pem` (public only) in a directory and returns a `KeyRing`: a
@@ -30,6 +113,15 @@ with `jwt.TypeAccessToken` (`at+jwt`, RFC 9068). A verifier with `RequireType`
 refuses a token whose type is missing or different, which stops an ID token or
 any other token signed by the same key from passing as an access token (RFC
 8725 §3.11). The comparison ignores case and an `application/` prefix.
+
+### Changed
+
+`golang.org/x/crypto` v0.43.0 to v0.55.0, now a direct dependency (`password`
+uses argon2 and bcrypt). v0.43.0 carries ten HIGH advisories that trivy flags,
+fixed by v0.52.0 and v0.55.0; v0.55.0 is the newest that still builds with Go
+1.25. `golang.org/x/text` moves with it to v0.41.0.
+
+The `secret` package doc now points at `password` for passwords.
 
 ## v0.3.1 (2026-09-11)
 

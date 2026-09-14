@@ -15,7 +15,7 @@ import "gitlab.internal/tuan.quang.tran/aioz-common/logging"
 ## Usage
 
 ```go
-log := logging.Bootstrap()   // stderr, text, info - for use before config loads
+log := logging.Bootstrap()   // stderr, text, info, redacting - for use before config loads
 
 handler, levelVar, err := logging.New(cfg.Logging)
 if err != nil {
@@ -41,6 +41,7 @@ this package chooses.
 | `log.format` | `text` (`json` in release) | encoding: text or json |
 | `log.add-source` | `false` (`true` in dev) | annotate records with `file:line` |
 | `log.async-buffer-size` | `4096` | records buffered before dropping starts |
+| `log.redact` | (none) | attribute keys logged as `[redacted]`, beyond the built-in list |
 
 Each optional sink is gated by its own `Enabled` flag rather than by a nil
 pointer, because `config` cannot bind pointer fields.
@@ -57,13 +58,46 @@ all).
 (records that always pass per window), `thereafter` (after the burst, every
 Nth record passes).
 
+## Redaction
+
+`New` and `Bootstrap` log the value of a sensitive attribute as `[redacted]`,
+in every output - stdout, file and Graylog - and whether the attribute came
+from `With`, from the context or from the record:
+
+```go
+log.Info("login", "email", email, "password", pw)
+// ... email=alice@example.com password=[redacted]
+```
+
+A key is sensitive when, lowercased and with `-` written as `_`, it is one of
+`RedactKeys()` or `log.redact` **exactly**: `password`, `passwd`, `secret`,
+`client_secret`, `api_secret`, `secret_key`, `private_key`, `token`,
+`access_token`, `refresh_token`, `id_token`, `auth_token`, `authorization`,
+`proxy_authorization`, `cookie`, `set_cookie`, `otp`, `api_key`, `x_api_key`.
+Every attribute inside a group with one of those names is redacted too.
+
+Exact, not substring: `passwordless` and `token_count` are not secrets, and a
+logger that redacts them teaches people to ignore `[redacted]`. `code`, `key`
+and `session` are too common to claim; add them to `log.redact` where they are
+secrets. Nothing is allocated for an attribute that is left alone.
+
+This is a **safety net**, not the control. It sees keys, not values: a token
+inside an `http.Header`, a struct or a request body is logged as it is. Keep
+secrets in [`secret.Token`](../secret/README.md), which redacts itself
+wherever it is formatted, and never log whole headers or bodies. A public
+value under a sensitive name (a public key logged as `api_key`) is redacted:
+rename the attribute.
+
 ## API
 
 | | |
 | --- | --- |
-| `Bootstrap() *slog.Logger` | a plain stderr logger for use before configuration is loaded |
-| `New(Config) (*logger.Handler, *slog.LevelVar, error)` | build the configured handler |
+| `Bootstrap() *slog.Logger` | a plain, redacting stderr logger for use before configuration is loaded |
+| `New(Config) (*logger.Handler, *slog.LevelVar, error)` | build the configured, redacting handler |
 | `(Config) Validate() error` | check level, format and sink settings |
 | `Levels()` / `Formats()` | accepted names, for shell completion |
 | `ParseLevel` / `ParseFormat` | name to `slog.Level` / `logger.Format` |
+| `RedactAttr(extra ...string)` | the `ReplaceAttr` that `New` and `Bootstrap` install, for a handler built by hand |
+| `RedactKeys() []string` | the built-in sensitive keys |
+| `Redacted` | `"[redacted]"` |
 | `Error` | the `errs.Tag` this package wraps failures with |

@@ -165,6 +165,37 @@ CI will not catch a leaked `Rows`, and a leaked `Rows` holds a connection.
 The mitigation is the same one above: `pgx.CollectRows`, `pgx.CollectOneRow` and
 `pgx.ForEachRow` close the rows and surface `rows.Err()` for you.
 
+## A sort chosen by the request goes through an allowlist
+
+`ORDER BY` cannot take a bind parameter, so a sort column from the query string
+is where SQL injection survives in code that parameterizes everything else.
+`SortColumns` maps the keys an endpoint documents to the columns they sort by:
+
+```go
+var mediaSort = postgres.SortColumns{
+    "title":   {"media", "title"},
+    "created": {"media", "created_at"},
+}
+
+orderBy, err := mediaSort.OrderBy(q.Get("sort"), q.Get("order"))
+if errors.Is(err, postgres.ErrInvalidSort) {
+    // 400
+}
+sql := "SELECT ... FROM media ORDER BY " + orderBy + ", media.id LIMIT $1 OFFSET $2"
+```
+
+- The key is matched **exactly**: no case folding, no trimming. A column name
+  is not a key unless it is listed as one.
+- The direction is `asc` or `desc` in any case; empty is `ASC`.
+- The column is quoted as an identifier (`"media"."title"`), so even a strange
+  name in the allowlist cannot end the clause.
+- `ErrInvalidSort` is the request's fault (400). A key that maps to an empty
+  identifier is a different error: the allowlist is wrong.
+
+With `OFFSET` pagination, finish with a unique column like the id: rows that
+tie on the sort column otherwise come back in any order, and a page repeats
+or skips them. NULLs sort last for `ASC` and first for `DESC`.
+
 ## What this package does not do
 
 **No migrations.** A runner would force a tool and a directory layout on every
@@ -214,6 +245,11 @@ func (db *DB) Stats(cb func(key monkit.SeriesKey, field string, val float64))
 
 func WithOperation(ctx context.Context, operation string) context.Context
 
+type SortColumns map[string]pgx.Identifier
+
+func (c SortColumns) OrderBy(key, direction string) (string, error)
+
+var ErrInvalidSort = errors.New("invalid sort")
 var Error = errs.Tag("postgres")
 ```
 
