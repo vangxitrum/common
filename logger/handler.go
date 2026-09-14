@@ -65,8 +65,14 @@ func (h *consoleHandler) Enabled(_ context.Context, level slog.Level) bool {
 func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	c := h.clone()
 	if len(h.groups) > 0 {
-		// nest attrs under the active group path
-		c.preAttrs = append(c.preAttrs, slog.Group(strings.Join(h.groups, "."), attrsToAny(attrs)...))
+		// Nest one group per name, innermost first, so ReplaceAttr sees the
+		// path element by element, as it does for record attributes. One
+		// group keyed "a.b" would hide "b" from a check on a group name.
+		g := slog.Group(h.groups[len(h.groups)-1], attrsToAny(attrs)...)
+		for i := len(h.groups) - 2; i >= 0; i-- {
+			g = slog.Group(h.groups[i], g)
+		}
+		c.preAttrs = append(c.preAttrs, g)
 	} else {
 		c.preAttrs = append(c.preAttrs, attrs...)
 	}

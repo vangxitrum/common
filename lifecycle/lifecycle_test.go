@@ -232,13 +232,14 @@ func TestSlowShutdownIsReported(t *testing.T) {
 	<-started
 	cancel()
 
+	// Wait on the goroutine dump: it is logged after the warning, once
+	// runtime.Stack returns, so waiting on the warning raced it.
 	require.Eventually(t, func() bool {
-		return strings.Contains(logs.String(), "component is slow to stop")
+		return strings.Contains(logs.String(), "goroutine dump for slow shutdown")
 	}, 5*time.Second, 10*time.Millisecond)
 
+	require.Contains(t, logs.String(), "component is slow to stop")
 	require.Contains(t, logs.String(), `"component":"sticky"`)
-	// And the stacks, so the hang can be located rather than guessed at.
-	require.Contains(t, logs.String(), "goroutine dump for slow shutdown")
 
 	close(release)
 	require.NoError(t, runners.Wait())

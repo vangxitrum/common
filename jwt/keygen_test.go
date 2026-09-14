@@ -143,6 +143,8 @@ func TestWriteKeyRefusesBadNames(t *testing.T) {
 		"k.pem",
 		"K.PEM",
 		"k.pub.pem",
+		"k.pub",
+		"K.PUB",
 		"a/b",
 		"../escape",
 		"has space",

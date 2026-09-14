@@ -59,6 +59,15 @@ func ParseTemplates(
 			if err != nil {
 				return err
 			}
+			// A ConfigMap or Secret mount keeps its bookkeeping under dot
+			// names, including "..data", a symlink to a directory. The
+			// templates are the symlinks beside it.
+			if path != overrideDir && strings.HasPrefix(entry.Name(), ".") {
+				if entry.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
+			}
 			if !entry.IsDir() {
 				paths = append(paths, path)
 			}

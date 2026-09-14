@@ -98,3 +98,31 @@ func TestAMissingOrEmptyOverrideDirectoryIsAnError(t *testing.T) {
 	_, err = mail.ParseTemplates(builtin(), "templates/*.html", t.TempDir())
 	require.Error(t, err)
 }
+
+// A ConfigMap or Secret mount is a timestamped directory, a "..data" symlink
+// to it, and one symlink per file into "..data". The dot entries are the
+// mount's bookkeeping, not templates, and "..data" is a directory.
+func TestAnOverrideDirectoryCanBeAConfigMapMount(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	version := filepath.Join(dir, "..2026_09_14_10_00_00.1")
+	require.NoError(t, os.Mkdir(version, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(version, "login_code.html"),
+		[]byte(`<p>Mounted {{.Code}}</p>`), 0o600))
+	require.NoError(t, os.Symlink(filepath.Base(version), filepath.Join(dir, "..data")))
+	require.NoError(t, os.Symlink(
+		filepath.Join("..data", "login_code.html"),
+		filepath.Join(dir, "login_code.html"),
+	))
+
+	templates, err := mail.ParseTemplates(builtin(), "templates/*.html", dir)
+	require.NoError(t, err)
+
+	body, err := templates.Render(
+		"login_code.html",
+		map[string]any{"Code": "1"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "<p>Mounted 1</p>", body)
+}
