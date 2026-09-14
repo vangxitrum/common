@@ -265,7 +265,7 @@ func ParseRetryAfter(resp *http.Response) (wait time.Duration, ok bool) {
 		if seconds < 0 {
 			return 0, false
 		}
-		if seconds > int(math.MaxInt64/int64(time.Second)) {
+		if int64(seconds) > math.MaxInt64/int64(time.Second) {
 			// Past what a Duration holds, the multiplication wraps - to -1s
 			// for the largest int, which would turn "wait forever" into "retry
 			// now". Saturate instead, so a Retryable sees it as too long.

@@ -69,6 +69,9 @@ test:
       - .cache/
   script:
     - go test ./...
+    # Compile, tests included, for a 32-bit target: an untyped constant that
+    # fits int only on 64-bit (v0.3.2's ParseRetryAfter) otherwise ships.
+    - GOARCH=386 go vet ./...
 
 # The container tests: everything the client packages exist for - a reconnect
 # after the broker really goes away, a redelivery, a drain - can only be

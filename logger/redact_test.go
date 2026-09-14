@@ -132,3 +132,29 @@ func TestWithoutReplaceAttrNothingChanges(t *testing.T) {
 
 	require.Contains(t, buf.String(), `"password":"visible"`)
 }
+
+// With under two or more groups used to wrap its attributes in one group
+// named by the joined path, so ReplaceAttr saw ["auth.password"] and a check
+// on one group name, the way logging.RedactAttr checks, let the value through.
+func TestReplaceAttrSeesEachGroupAroundWith(t *testing.T) {
+	t.Parallel()
+
+	var seen [][]string
+	var buf bytes.Buffer
+	h := testConsole(&buf, func(groups []string, a slog.Attr) slog.Attr {
+		seen = append(seen, slices.Clone(groups))
+		if slices.Contains(groups, "password") {
+			return slog.String(a.Key, "[redacted]")
+		}
+		return a
+	})
+
+	slog.New(h).WithGroup("auth").WithGroup("password").
+		With("with", "WITH-SECRET").
+		Info("m", "record", "RECORD-SECRET")
+
+	require.NotContains(t, buf.String(), "WITH-SECRET")
+	require.NotContains(t, buf.String(), "RECORD-SECRET")
+	require.Contains(t, buf.String(), `"auth.password.with":"[redacted]"`)
+	require.Equal(t, [][]string{{"auth", "password"}, {"auth", "password"}}, seen)
+}

@@ -154,7 +154,9 @@ func describeKey(
 //
 // A leading "." is ignored by LoadKeyRing, and a name ending in ".pem" is a
 // caller passing the file name rather than the key name, which would produce
-// "a.pem.pem".
+// "a.pem.pem". A name ending in ".pub" would put a private key in
+// "a.pub.pem", which LoadKeyRing reads as the public key of "a", and fail the
+// whole ring.
 func checkKeyName(name string) error {
 	switch {
 	case !keyName.MatchString(name):
@@ -172,6 +174,13 @@ func checkKeyName(name string) error {
 			"key name %q must not end in %q; pass the bare name",
 			name,
 			privateSuffix,
+		)
+	case strings.HasSuffix(strings.ToLower(name), ".pub"):
+		return Error.Errorf(
+			"key name %q must not end in %q; LoadKeyRing reads %q as a public key",
+			name,
+			".pub",
+			name+privateSuffix,
 		)
 	}
 	return nil

@@ -155,12 +155,15 @@ func TestTheServiceLoggerRedacts(t *testing.T) {
 
 	slog.New(handler).With("authorization", "Bearer abc").
 		Info("login", "password", "hunter2", "wallet_seed", "seed words", "user_id", "42")
+	// With under nested groups, the last of them sensitive.
+	slog.New(handler).WithGroup("auth").WithGroup("password").
+		With("current", "nested secret").Info("change")
 	require.NoError(t, shutdown(handler))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	out := string(data)
-	for _, secret := range []string{"hunter2", "seed words", "Bearer abc"} {
+	for _, secret := range []string{"hunter2", "seed words", "Bearer abc", "nested secret"} {
 		require.NotContains(t, out, secret)
 	}
 	require.Contains(t, out, logging.Redacted)
