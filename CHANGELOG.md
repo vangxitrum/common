@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.2 (2026-09-14)
+
+Release note: [`.gitlab/releases/v0.3.2.md`](.gitlab/releases/v0.3.2.md).
 
 Two `jwt` additions: a key ring loaded from a directory of PEM files, so
 rotating a key is a file change on each replica, and the `typ` header, so an
@@ -10,6 +12,9 @@ And the server-side controls from the OWASP cheat sheets that every service
 was missing: the real client address behind a proxy, a rate limiter shared by
 every replica, one way to store passwords, and security headers with a CORS
 policy that is off until it is configured.
+
+Also `mail` and `random`, a display hint for `secret` keys, and the two
+`httpclient` fixes the v0.3.1 review asked for.
 
 ### Added
 
@@ -114,6 +119,30 @@ refuses a token whose type is missing or different, which stops an ID token or
 any other token signed by the same key from passing as an access token (RFC
 8725 §3.11). The comparison ignores case and an `application/` prefix.
 
+**`mail`** - one `Sender` interface in place of each service's own Resend
+helper. The `resend` provider retries rate limits, an idempotent request still
+in flight, 5xx responses and transport errors with exponential backoff, and
+sends the same `Idempotency-Key` on every attempt, so a message goes out once;
+quota exhaustion, any other 4xx and a `Retry-After` over 30s are not retried.
+An empty API key is a startup error. The `log` provider, the dev and test
+default, records that a mail was not sent. `ParseAddress` validates an address
+(the HTML email pattern, tightened per OWASP) and gives a `Canonical` form for
+dedupe; `ParseTemplates` parses `html/template` bodies from the service's
+embedded files or an override directory, which may be a ConfigMap mount;
+`mail/mailtest.Recorder` captures messages in tests. Nothing logs a subject,
+body, address or key.
+
+**`random`** - unbiased CSPRNG helpers: `Bytes`, `IntN`, `String(n, Alphabet)`
+and `Digits(n)`, with the `Decimal`, `Base62` and `Crockford` alphabets. They
+use rejection sampling and never return an error; `Digits` panics below
+`MinDigits` (6, SP 800-63B). A new depguard rule, `no-math-rand`, keeps
+`math/rand` to tests and retry jitter.
+
+**`secret.Key.Hint`** - the key's prefix and last four characters
+(`aioz_...w2Qe`), for a dashboard to show which key is which. `KeyRef` carries
+it as `Hint`. The stored hash cannot give it back, so store the hint when the
+key is minted, and never look a key up by it.
+
 ### Changed
 
 `golang.org/x/crypto` v0.43.0 to v0.55.0, now a direct dependency (`password`
@@ -121,7 +150,30 @@ uses argon2 and bcrypt). v0.43.0 carries ten HIGH advisories that trivy flags,
 fixed by v0.52.0 and v0.55.0; v0.55.0 is the newest that still builds with Go
 1.25. `golang.org/x/text` moves with it to v0.41.0.
 
-The `secret` package doc now points at `password` for passwords.
+The `secret` package doc now points at `password` for passwords, and its random
+generation goes through `random`, with output format and distribution
+unchanged.
+
+`secret.KeyRef` gains a `Hint` field, serialized as `"hint"`: anything that
+encodes a `KeyRef` to JSON emits one more key.
+
+`github.com/resend/resend-go/v3` v3.10.1 is a new dependency, for `mail`.
+
+### Fixed
+
+**`httpclient.Retry.Do`** sets the first attempt's `Idempotency-Key` on every
+retry, overriding what `newRequest` builds. A key generated inside
+`newRequest` used to change on every attempt, so a `POST` that timed out after
+the server processed it could be taken as a second request.
+
+**`httpclient` private-network guard** - an `allowed-networks` IPv4 prefix now
+also allows that address in its NAT64 and 6to4 IPv6 forms. The block check
+already looked through those forms and the allowlist did not, so an IPv6-only
+host behind NAT64 was refused.
+
+**`httpclient.ParseRetryAfter`** - a `Retry-After` of the largest integer
+wrapped to -1s, turning "wait forever" into "retry now". It saturates, so
+`DefaultRetryable` sees it as too long and stops.
 
 ## v0.3.1 (2026-09-11)
 
