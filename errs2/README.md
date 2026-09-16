@@ -55,12 +55,36 @@ components are failing at once because of the same root cause, and the second
 and third errors, arriving milliseconds later, are the ones that explain the
 first.
 
+## Where an error began
+
+```go
+frames := errs2.Frames(err)
+// ["user.(*Service).DeleteExpiredRefreshTokens:254", "chore.(*Chore).Run.func1:81", ...]
+```
+
+`zeebo/errs` captures a stack on its first wrap but keeps it private: it only
+prints it under `%+v`, glued to the message as `\n\t`-separated frames, and
+only when the errs error is the outermost one. Wrap it in `fmt.Errorf("%w")`
+or an `apierr` and `%+v` prints no stack at all. `Frames` walks the chain and
+returns the frames as a slice, and `Origin` returns the error they came from.
+
+`Origin` is the **innermost** errs error, because its stack starts where the
+failure did. An errs error wrapped again after a `fmt.Errorf` captures a new
+stack that starts higher up. It is found by type, not with `errs.Tags`, which
+reports nothing for `errs.Errorf` and `errs.Wrap`: they capture a stack under
+an empty tag.
+
+For logging, [`logger.ErrorStack`](../logger/README.md) trims these frames and
+the handler prints them under the line.
+
 ## API
 
 ```go
 func IsCanceled(err error) bool
 func IgnoreCanceled(err error) error
 func Collect(errch chan error, duration time.Duration) error
+func Origin(err error) error
+func Frames(err error) []string
 
 type Group struct{ ... }
 func (group *Group) Go(f func() error)

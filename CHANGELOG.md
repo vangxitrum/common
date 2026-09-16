@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+**`logger` logs an error as its message, with a stack you can read.** The
+console handler wrote an error attribute with `%v`, which dropped the
+zeebo/errs stack. `json.Marshal`, used by the JSON console, the file sink and
+Graylog, wrote it as `{}`, because zeebo/errs's error has no exported fields.
+Now `err` is the message, and the stack of where the error began is
+`stacktrace`, one trimmed `function:line` per line. The cause of an `apierr`
+counts. `Critical`'s call-site stack still wins. On the console every stack
+block, `Critical`'s included, is now labeled `stack:` and indented under the
+line. See "Errors and their stacks" in [`logger/README.md`](logger/README.md).
+
+### Added
+
+**`errs2.Origin` and `errs2.Frames`** - the innermost zeebo/errs error in a
+chain, and its stack as a `[]string`, through `fmt.Errorf("%w")` and
+`apierr`, and for untagged `errs.Errorf` too. See
+[`errs2/README.md`](errs2/README.md).
+
+**`logger.ErrorStack`, `logger.FormatStack` and `logger.ErrorAttr`** - the
+same pieces for a handler built on `slog.TextHandler`, which prints an error
+with `%+v` and so quotes its whole stack onto one line with every newline
+escaped. `ErrorAttr` is a `ReplaceAttr` that logs the message. `ErrorStack`
+trims the frames: host and owner dropped, runtime, errgroup and lifecycle
+frames left out. `FormatStack` renders the block to print under the line.
+
 ## v0.3.2 (2026-09-14)
 
 Release note: [`.gitlab/releases/v0.3.2.md`](.gitlab/releases/v0.3.2.md).
