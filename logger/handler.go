@@ -163,7 +163,7 @@ func (h *consoleHandler) writeConsole(level slog.Level, t time.Time, msg, src st
 		if k == "logged_at" {
 			continue
 		}
-		if k == "stacktrace" {
+		if k == stackKey {
 			stack, _ = v.(string)
 			continue
 		}
@@ -171,7 +171,8 @@ func (h *consoleHandler) writeConsole(level slog.Level, t time.Time, msg, src st
 		sb.WriteString(colorize(darkGray, fmt.Sprintf("%s=%v", k, v)))
 	}
 	if stack != "" {
-		sb.WriteString(colorize(lightRed, "\nstacktrace:"+stack))
+		frames := strings.Split(strings.TrimPrefix(stack, "\n"), "\n")
+		sb.WriteString(colorize(lightRed, FormatStack(frames)))
 	}
 	_, _ = fmt.Fprintln(h.out, sb.String())
 }
@@ -219,6 +220,9 @@ func (h *consoleHandler) collect(dst map[string]any, attrs []slog.Attr, prefix s
 }
 
 func (h *consoleHandler) collectAttr(dst map[string]any, a slog.Attr, prefix string, groups []string) {
+	// Taken before Resolve: an error that is also a LogValuer, as apierr.Error
+	// is, resolves to its message and would lose its cause's stack.
+	err, _ := a.Value.Any().(error)
 	a.Value = a.Value.Resolve()
 	if a.Value.Kind() == slog.KindGroup {
 		// The three-index slice makes append copy, so sibling groups never
@@ -232,7 +236,25 @@ func (h *consoleHandler) collectAttr(dst map[string]any, a slog.Attr, prefix str
 		}
 		a.Value = a.Value.Resolve()
 	}
-	dst[prefix+a.Key] = a.Value.Any()
+
+	value := a.Value.Any()
+	if e, ok := value.(error); ok {
+		// Its message, not the error: text would drop the stack and
+		// json.Marshal writes zeebo/errs's error, which has no exported
+		// fields, as {}. The stack goes in its own attribute.
+		value = e.Error()
+	}
+	dst[prefix+a.Key] = value
+
+	// The first error's stack, unless one is already there: Critical's
+	// call-site stack, added after the record's attributes, overwrites it.
+	if err != nil {
+		if _, ok := dst[stackKey]; !ok {
+			if frames := ErrorStack(err); len(frames) > 0 {
+				dst[stackKey] = strings.Join(frames, "\n")
+			}
+		}
+	}
 }
 
 func attrsToAny(attrs []slog.Attr) []any {

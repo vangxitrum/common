@@ -281,11 +281,11 @@ ctx = logger.AppendContext(ctx, "user_id", userID)
 logger.Critical(slog.Default(), "database connection lost", "host", "postgres:5432")
 // Console output:
 // [2026-05-08 12:00:00.000] CRT database connection lost host=postgres:5432
-// stacktrace:
-// main.connectDB
-//	/app/db.go:87
-// main.main
-//	/app/main.go:34
+//   stack:
+//     main.connectDB
+//     	/app/db.go:87
+//     main.main
+//     	/app/main.go:34
 
 // With a child logger and context:
 ctx := context.Background()
@@ -307,6 +307,80 @@ For attaching a stack trace to any other log level, use `logger.Stack()`:
 ```go
 slog.Error("unexpected nil", "stacktrace", logger.Stack(), "component", "router")
 ```
+
+## Errors and their stacks
+
+Log an error as it is. The handler writes its message, and when something in
+its chain was made by [zeebo/errs](https://github.com/zeebo/errs), the stack of
+where it began goes in `stacktrace`, which the console prints as a block under
+the line:
+
+```go
+slog.Error("chore pass failed; retrying next interval", "err", err)
+```
+
+```
+[2026-09-14 11:04:40.603] ERR chore pass failed; retrying next interval chore=user:delete-expired-refresh-tokens err=user: ERROR: relation "refresh_tokens" does not exist (SQLSTATE 42P01)
+  stack:
+    vms-v2/internal/app/user.(*Service).DeleteExpiredRefreshTokens:254
+    vms-v2/internal/utils/chore.(*Chore).Run.func1:81
+    aioz-common/cycle.(*Cycle).Run:84
+    vms-v2/internal/utils/chore.(*Chore).Run:76
+```
+
+- JSON, the file sink and Graylog get `err` as a string and `stacktrace` as
+  one `function:line` per line.
+- The frames are trimmed. The host and owner are dropped from each import path
+  (`10.0.0.50/tuan.quang.tran/vms-v2/...` becomes `vms-v2/...`), and the
+  runtime, errgroup and lifecycle frames that start every goroutine are left
+  out.
+- The stack is found through `fmt.Errorf("%w")` and through an `apierr`,
+  whose cause's stack is taken before it resolves to its message. See
+  [`errs2.Frames`](../errs2/README.md).
+- A record gets the stack of its first error. `Critical`'s call-site stack
+  wins over it.
+
+### In a handler built on slog.TextHandler
+
+`slog.TextHandler` prints an error with `%+v`, and a zeebo/errs error then
+appends its whole stack, which the handler quotes onto the same line with every
+newline escaped:
+
+```
+err="user: ERROR: relation \"refresh_tokens\" ...\n\tvms-v2/internal/app/user...:254\n\t..."
+```
+
+A handler that wraps one, such as a service's own colorizing handler, can use
+the same pieces this package uses:
+
+```go
+inner := slog.NewTextHandler(buf, &slog.HandlerOptions{
+    // After any other ReplaceAttr, such as logging.RedactAttr().
+    ReplaceAttr: logger.ErrorAttr,
+})
+
+// In Handle, before the inner handler formats the record, so an apierr is
+// still an error rather than its resolved message:
+var stack []string
+r.Attrs(func(a slog.Attr) bool {
+    if err, ok := a.Value.Any().(error); ok && stack == nil {
+        stack = logger.ErrorStack(err)
+    }
+    return true
+})
+
+// And when the line is printed:
+fmt.Println(line + logger.FormatStack(stack))
+```
+
+An error attached with `With` reaches only `ErrorAttr` inside the wrapped
+handler, so it is logged as its message with no stack.
+
+| Function | Description |
+|----------|-------------|
+| `ErrorStack(err) []string` | Where `err` began, trimmed; nil when nothing in its chain carries a stack |
+| `FormatStack(frames) string` | The `"\n  stack:"` block the console prints under a line; `""` for none |
+| `ErrorAttr` | A `ReplaceAttr` that logs an error value as its message |
 
 ## Dynamic log level
 
