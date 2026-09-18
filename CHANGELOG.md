@@ -28,6 +28,48 @@ escaped. `ErrorAttr` is a `ReplaceAttr` that logs the message. `ErrorStack`
 trims the frames: host and owner dropped, runtime, errgroup and lifecycle
 frames left out. `FormatStack` renders the block to print under the line.
 
+**`depin`** - files stored and fetched through the depin network, behind a
+provider-neutral `Storage`. The go-sdk is wrapped rather than used directly for
+three reasons: its identifiers are declared in `go-sdk/internal/vo`, which Go's
+internal rule puts out of reach of every other module, so ids cross the
+boundary as `[]byte` and become `uuid.UUID`; it logs through a `*zap.Logger`,
+which is bridged into the caller's `*slog.Logger` so the SDK's retry and
+transfer lines reach the same handler; and it reports every failure as a
+formatted string, so failures are classified from the gRPC status underneath
+into an `*Error` whose `Code` and `Temporary` say whether trying again could
+help. A `log` provider stores nothing, for development and CI, and
+`depin/depintest` holds a recording fake. Only the short coordinator calls are
+retried: an upload's reader cannot be rewound, and the SDK already retries its
+own download pieces. See [`depin/README.md`](depin/README.md).
+
+**Importing `depin` requires a `replace` directive.** A consuming module needs
+`replace github.com/gogo/protobuf => github.com/regen-network/protobuf
+v1.3.3-alpha.regen.1` in its own go.mod. Go ignores a `replace` declared by a
+dependency, and the go-sdk requires one for a `gogo/protobuf` version that does
+not exist upstream, so without it the build fails with `unknown revision
+v1.3.3` even in a service that never touches this package.
+
+That replacement in turn requires a pre-split `google.golang.org/genproto`,
+whose `googleapis/api` packages are also in the split-out
+`genproto/googleapis/api` that newer grpc requires, so `go mod tidy` stops with
+`ambiguous import` wherever something pulls in grpc-gateway, as OpenTelemetry
+does. This module now requires `google.golang.org/genproto` at a post-split
+version, where those packages are gone and the ambiguity with them. A consumer
+that hits the same error fixes it the same way.
+
+**`slack`** - messages posted to Slack's Web API through a provider-neutral
+`Notifier`, with a `log` provider for development and a recording fake in
+`slack/slacktest`. `chat.postMessage` answers 200 with `{"ok": false, "error":
+"..."}` for almost every failure, including a missing channel and a revoked
+token, so a client that reads the status code reports those as delivered. Here
+the body decides first and the status second, and a failure arrives as an
+`*Error` whose `Code`, taken from a closed set, says whether trying again could
+help. A rate limit's `Retry-After` is honored unless it is longer than
+`httpclient.MaxRetryAfter`. There is no vendor SDK and no idempotency key: only
+failures known not to have posted are retried, because Slack offers no way to
+make a repeat harmless. The bot token is a `secret.Token`, and no message text
+or block reaches a log line. See [`slack/README.md`](slack/README.md).
+
 ## v0.3.2 (2026-09-14)
 
 Release note: [`.gitlab/releases/v0.3.2.md`](.gitlab/releases/v0.3.2.md).
