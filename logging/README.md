@@ -54,6 +54,11 @@ pointer, because `config` cannot bind pointer fields.
 `service` (blank uses the hostname), `timeout`, `index-fields` (blank sends
 all).
 
+**Elasticsearch sink** (`log.elasticsearch.*`): `enabled`, `url` (base URL, no
+path), `data-stream`, `bearer-token` / `api-key` / `username` + `password`,
+`batch-size`, `flush-interval`, `timeout`, `index-fields`, `service`. Blank
+`service` uses the hostname; `host.name` is always the hostname.
+
 **Sampling** (`log.sampling.*`): `enabled`, `tick` (the window), `initial`
 (records that always pass per window), `thereafter` (after the burst, every
 Nth record passes).

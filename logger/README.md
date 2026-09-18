@@ -1,6 +1,6 @@
 # aioz-logger
 
-A `slog.Handler` for Go that adds async dispatch, buffered file output, Graylog (GELF) shipping, and per-level sampling on top of the standard `log/slog` pipeline. No custom logger type — create the handler, pass it to `slog.New` or `slog.SetDefault`, and use the standard `slog` API everywhere.
+A `slog.Handler` for Go that adds async dispatch, buffered file output, Graylog (GELF) and Elasticsearch shipping, and per-level sampling on top of the standard `log/slog` pipeline. No custom logger type — create the handler, pass it to `slog.New` or `slog.SetDefault`, and use the standard `slog` API everywhere.
 
 ## Features
 
@@ -10,6 +10,7 @@ A `slog.Handler` for Go that adds async dispatch, buffered file output, Graylog 
 - **Buffered file output** — `bufio.Writer` with periodic flush, configurable buffer size, size-based rotation, and backup retention
 - **Graceful shutdown** — drains the async queue, flushes buffers, then closes files
 - **Graylog (GELF)** — ships structured logs to a Graylog GELF HTTP input
+- **Elasticsearch** — batches structured logs into a data stream through the bulk API
 - **Context-aware fields** — attach attributes to a `context.Context`; they appear on every log call using that context
 
 ## Requirements
@@ -98,6 +99,9 @@ logger.Config{
 
     // Optional: ship logs to Graylog.
     Graylog: &logger.GraylogConfig{...},
+
+    // Optional: ship logs to Elasticsearch.
+    Elasticsearch: &logger.ElasticsearchConfig{...},
 }
 ```
 
@@ -114,7 +118,7 @@ Keep the `*Handler` reference for lifecycle management; use `*slog.Logger` (from
 
 ## Async dispatch
 
-All log calls return immediately. Records are processed by a single background goroutine that calls sinks (file, Graylog) sequentially. When the channel is full, new records are dropped rather than blocking the caller.
+All log calls return immediately. Records are processed by a single background goroutine that calls sinks (file, Graylog, Elasticsearch) sequentially. When the channel is full, new records are dropped rather than blocking the caller.
 
 ```go
 slog.Info("this returns immediately regardless of sink speed")
@@ -235,6 +239,42 @@ Graylog: &logger.GraylogConfig{
 ```
 
 When `IndexFields` is empty (the default), all attributes are forwarded.
+
+## Elasticsearch
+
+```go
+logger.Config{
+    Elasticsearch: &logger.ElasticsearchConfig{
+        URL:         "https://logs.example.com", // base URL; /_bulk is appended
+        DataStream:  "logs-aioz-backend",
+        BearerToken: "...",       // or APIKey, or Username/Password
+        Service:     "backend",   // service.name on every document
+        Host:        "vps-1",     // host.name on every document
+    },
+}
+```
+
+Documents are ECS-shaped, so a Kibana data view over `logs-aioz-*` works
+without configuring fields: `@timestamp`, `message`, `log.level`
+(`DEBUG`/`INFO`/`WARN`/`ERROR`/`CRITICAL`), `log.origin.file.name` from
+`AddSource`, `error.message` and `error.stack_trace` from an `error` attribute
+and `logger.Critical`, `trace.id` from a `trace_id` attribute, and everything
+else under `labels.*`. ANSI coloring is stripped.
+
+Unlike the Graylog sink, which POSTs one record at a time, this one batches:
+`BatchSize` records (default 500) or `FlushInterval` (default 5s), whichever
+comes first, and `Close` flushes what is left. Batching matters because the
+sink runs on the single async consumer goroutine, so a per-record round trip
+would show up as a rising `Handler.Dropped()` rather than as slow logging.
+
+A rejected batch is reported and dropped, not retried - buffering for an
+Elasticsearch that is down is the failure mode that must not take the service
+with it.
+
+Sending the bearer token rather than a password is the point of the
+`BearerToken` field: a reverse proxy in front of Elasticsearch checks the token
+and swaps in the real credentials, so no Elasticsearch password is deployed
+alongside the service.
 
 ## Context-aware fields
 

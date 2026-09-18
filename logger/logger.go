@@ -24,7 +24,7 @@ type Config struct {
 	AddSource bool
 
 	// ReplaceAttr, if set, rewrites or drops each attribute before it is
-	// written anywhere: stdout, file or Graylog. It sees attributes from every
+	// written anywhere: stdout, file, Graylog or Elasticsearch. It sees attributes from every
 	// source - WithAttrs, the context and the record - with their group path,
 	// as slog.HandlerOptions.ReplaceAttr does; an Attr with an empty Key is
 	// dropped. logging.RedactAttr is the one services use.
@@ -42,10 +42,15 @@ type Config struct {
 
 	// Graylog, if set, ships logs to a GELF HTTP endpoint.
 	Graylog *GraylogConfig
+
+	// Elasticsearch, if set, ships logs to an Elasticsearch data stream
+	// through the bulk API.
+	Elasticsearch *ElasticsearchConfig
 }
 
 // Handler is a slog.Handler that adds async dispatch, buffered file output,
-// Graylog shipping, and per-level sampling on top of the standard slog pipeline.
+// Graylog and Elasticsearch shipping, and per-level sampling on top of the
+// standard slog pipeline.
 //
 // Typical usage:
 //
@@ -79,6 +84,10 @@ func New(cfg Config) (*Handler, error) {
 
 	if cfg.Graylog != nil {
 		sinks = append(sinks, newGraylogSink(*cfg.Graylog))
+	}
+
+	if cfg.Elasticsearch != nil {
+		sinks = append(sinks, newElasticsearchSink(*cfg.Elasticsearch))
 	}
 
 	console := newConsoleHandler(cfg.Level, cfg.Format, cfg.AddSource, sinks)
