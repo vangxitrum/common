@@ -25,9 +25,10 @@ type Config struct {
 
 	Redact []string `help:"attribute keys whose values are logged as [redacted], beyond the built-in password, token, authorization, cookie and api_key family" default:""`
 
-	File     FileConfig
-	Graylog  GraylogConfig
-	Sampling SamplingConfig
+	File          FileConfig
+	Graylog       GraylogConfig
+	Elasticsearch ElasticsearchConfig
+	Sampling      SamplingConfig
 }
 
 // FileConfig configures the rotating file sink.
@@ -49,6 +50,22 @@ type GraylogConfig struct {
 	Service     string        `help:"GELF host field; blank uses the hostname" default:""`
 	Timeout     time.Duration `help:"HTTP request timeout" default:"5s"`
 	IndexFields []string      `help:"attributes to index; blank sends all" default:""`
+}
+
+// ElasticsearchConfig configures the Elasticsearch bulk sink.
+type ElasticsearchConfig struct {
+	Enabled       bool          `help:"ship logs to Elasticsearch" default:"false"`
+	URL           string        `help:"Elasticsearch base URL, no path" default:""`
+	DataStream    string        `help:"target data stream; should match the logs-aioz-* index template" default:"logs-aioz-default"`
+	BearerToken   string        `user:"true" help:"bearer token, for a proxy that swaps in the real credentials" default:""`
+	APIKey        string        `user:"true" help:"Elasticsearch API key, when talking to it directly" default:""`
+	Username      string        `user:"true" help:"basic auth username" default:""`
+	Password      string        `user:"true" help:"basic auth password" default:""`
+	BatchSize     int           `help:"records buffered before a bulk flush" default:"500"`
+	FlushInterval time.Duration `help:"how often a partial batch is flushed anyway" default:"5s"`
+	Timeout       time.Duration `help:"HTTP request timeout" default:"10s"`
+	IndexFields   []string      `help:"attributes to forward; blank sends all" default:""`
+	Service       string        `help:"service.name on every document; blank uses the hostname" default:""`
 }
 
 // SamplingConfig configures per-level count sampling.
@@ -126,6 +143,14 @@ func (c Config) Validate() error {
 	}
 	if _, err := ParseFormat(c.Format); err != nil {
 		return err
+	}
+	if c.Elasticsearch.Enabled {
+		if c.Elasticsearch.URL == "" {
+			return Error.Errorf("log.elasticsearch.url is required when log.elasticsearch.enabled is true")
+		}
+		if strings.HasSuffix(strings.TrimSuffix(c.Elasticsearch.URL, "/"), "/_bulk") {
+			return Error.Errorf("log.elasticsearch.url is the base URL; the sink appends /_bulk itself")
+		}
 	}
 	if c.File.Enabled {
 		if c.File.Path == "" {
@@ -205,6 +230,28 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 			Service:     service,
 			Timeout:     cfg.Graylog.Timeout,
 			IndexFields: cfg.Graylog.IndexFields,
+		}
+	}
+
+	if cfg.Elasticsearch.Enabled {
+		hostname, _ := os.Hostname()
+		esService := cfg.Elasticsearch.Service
+		if esService == "" {
+			esService = hostname
+		}
+		lc.Elasticsearch = &logger.ElasticsearchConfig{
+			URL:           cfg.Elasticsearch.URL,
+			DataStream:    cfg.Elasticsearch.DataStream,
+			BearerToken:   cfg.Elasticsearch.BearerToken,
+			APIKey:        cfg.Elasticsearch.APIKey,
+			Username:      cfg.Elasticsearch.Username,
+			Password:      cfg.Elasticsearch.Password,
+			BatchSize:     cfg.Elasticsearch.BatchSize,
+			FlushInterval: cfg.Elasticsearch.FlushInterval,
+			Timeout:       cfg.Elasticsearch.Timeout,
+			IndexFields:   cfg.Elasticsearch.IndexFields,
+			Service:       esService,
+			Host:          hostname,
 		}
 	}
 

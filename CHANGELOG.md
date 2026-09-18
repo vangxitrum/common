@@ -16,6 +16,63 @@ line. See "Errors and their stacks" in [`logger/README.md`](logger/README.md).
 
 ### Added
 
+**`s3client`** - objects stored in an S3-compatible bucket, ours included,
+replacing the three divergent copies in `aioz-stream`, `aioz-map` and
+`crawler-service`. Our own service is not AWS, and since aws-sdk-go-v2 v1.72
+the SDK computes a CRC32 for every request by default: it sends
+`x-amz-checksum-crc32` and `x-amz-sdk-checksum-algorithm`, and it turns a
+streaming body into `aws-chunked` with a trailing checksum. Our service rejects
+all of it. So request and response checksums are set to *when required*, path
+style is forced, and `DeleteObjects` is given the `Content-MD5` its protocol
+defines by a middleware that **swaps** the SDK's checksum middleware rather
+than adding one - swapped, it inherits that middleware's position before SigV4
+signs, so the header is in `SignedHeaders`; added, it would not be and the
+signature would be refused. The setting is applied to the uploader as well as
+to the client, which is the half of the fix `crawler-service` has and nothing
+else did.
+
+Uploads go through `feature/s3/transfermanager`, because the SDK has deprecated
+`feature/s3/manager`. That changes nothing about the workaround: transfermanager
+carries the same checksum setting with the same `WhenSupported` default, and its
+setting **takes precedence over** the S3 client's rather than merely failing to
+inherit it, so getting it wrong there is worse than before. Downloads stay on
+the plain `*s3.Client`: transfermanager's `GetObject` always issues ranged GETs
+from a goroutine pool and returns a body with no `Close`, which is the
+connection leak this package exists to remove. transfermanager is still v0.x,
+and it is confined to `Put`.
+
+`Client` embeds the vendor's `*s3.Client` rather than hiding it behind an
+interface, for the reason `redis` and `postgres` define none: `*s3.Client` has
+around ninety methods and we use nine, so an interface would either lock the
+rest away or grow forever. `Config.Compat` names the server, `aioz` by default
+or `aws` for anything current. `aws` sets the SDK's defaults explicitly rather
+than leaving them alone: both are enums whose zero value is `Unset`, and only
+`config.LoadDefaultConfig` - which this package deliberately does not call, so
+that `~/.aws`, the `AWS_*` environment, SSO and the EC2 metadata service cannot
+change what a service talks to - resolves `Unset` into a default.
+
+The bugs the old copies shared are closed rather than carried. The uploader is
+built once in the constructor instead of once per upload, at 8MiB across four
+parts rather than 100MB across five. `Get` returns an `*Object` whose `Body` is
+an `io.ReadCloser`, because a bare `io.Reader` off `resp.Body` leaves the caller
+unable to close the connection it was handed. A missing object is
+`CodeNotFound`, which `IsNotFound` reports, rather than a `false` that also
+swallowed an expired credential. The startup check is `HeadBucket`, not the
+`ListBuckets` scan a bucket-scoped key is not allowed to make. Every method
+takes the caller's context, in place of `context.Background()` with a hardcoded
+90-second timeout. And `httpclient`'s 32MiB response cap and 30-second request
+backstop are turned off here, because both are right for an API and would
+truncate a download or kill a working upload.
+
+Failures arrive as an `*Error` whose `Code` comes from a closed set and whose
+`Temporary` says whether trying again could help, sharing `depin`'s and
+`slack`'s vocabulary. Retries are the SDK's own, configured from `Config`, and
+there is no second layer on top: an outer loop would cover only the wrapped
+methods, so a call through the embedded client would behave differently without
+saying so. Credentials are `secret.Token`s and nothing logs an object key. See
+[`s3client/README.md`](s3client/README.md).
+
+
 **`errs2.Origin` and `errs2.Frames`** - the innermost zeebo/errs error in a
 chain, and its stack as a `[]string`, through `fmt.Errorf("%w")` and
 `apierr`, and for untagged `errs.Errorf` too. See
