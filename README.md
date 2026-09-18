@@ -35,6 +35,7 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/httpclient`](httpclient/README.md) | `httpclient` | The outbound `*http.Client` with the timeouts, connection pool, redirect policy and metrics `http.DefaultClient` has none of. Pure `net/http`: no server, no router, no framework. Retry is opt-in per call site. |
 | [`aioz-common/depin`](depin/README.md) | `depin` | Files stored and fetched through the depin network, behind a provider-neutral `Storage`. The go-sdk is wrapped rather than used directly: its identifiers live in an internal package no other module may import, it logs through zap, and it reports every failure as a formatted string. So ids cross as `uuid.UUID`, its logs are bridged into the caller's `slog.Logger`, and a failure says whether trying again could help. Needs a `replace` directive; see its README. |
 | [`aioz-common/slack`](slack/README.md) | `slack` | Messages posted to Slack through a provider-neutral `Notifier`. The Web API answers 200 with `{"ok": false}` for most failures, so the body decides and the status only settles the answers that carry no body. A closed set of error codes says whether trying again could help, a `Retry-After` is honored up to a bound, and the bot token is a `secret.Token`. |
+| [`aioz-common/s3client`](s3client/README.md) | `s3client` | Objects stored in an S3-compatible bucket, ours included. Our own service rejects the flexible checksums aws-sdk-go-v2 now sends by default, so the workarounds are the package: checksums only where required, on the client *and* on the uploader, which does not inherit the client's setting; path style forced; and `DeleteObjects` signed with a `Content-MD5` from a middleware swapped in before SigV4 rather than added after. The uploader is built once, a missing object is a code rather than a false, and a body comes back as an `io.ReadCloser`. |
 | [`aioz-common/clientip`](clientip/README.md) | `clientip` | The address a request really came from, behind reverse proxies: `X-Forwarded-For` walked from the right past a trusted-proxy list, so a client cannot pick the address it is rate limited and logged by. |
 | [`aioz-common/ratelimit`](ratelimit/README.md) | `ratelimit` | Rate limits shared by every replica: GCRA windows in Redis with an exact Retry-After, a denial that consumes nothing so no one can be locked out on purpose, hashed keys, and a bounded fallback when Redis fails. |
 | [`aioz-common/password`](password/README.md) | `password` | Password storage to OWASP and NIST: argon2id at OWASP's floor, one derivation on every path so response time does not reveal which accounts exist, legacy bcrypt upgraded on login, NFC, and a bound on how many hashes hold memory at once. |
@@ -85,6 +86,7 @@ aioz-common/
 ├── readcloser/       # io.ReadCloser combinators
 ├── redis/            # configured, observable go-redis client
 ├── retry/            # exponential backoff with jitter
+├── s3client/         # S3-compatible object storage
 ├── secret/           # bearer secrets and their hashes
 ├── signal/           # one-shot errors, lazy channels
 ├── slack/            # Slack Web API notifier

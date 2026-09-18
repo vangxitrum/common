@@ -18,7 +18,8 @@
 //	f, err := avatars.Open(fh)        // ErrTooLarge: 413, ErrRefused: 415
 //	defer f.Close()
 //	key := uuid.New().String()        // store under a name the client did not choose
-//	_, err = store.Put(ctx, key, f)   // a read past MaxBytes fails the Put
+//	_, err = store.Put(ctx, key, f,   // a read past MaxBytes fails the Put
+//		s3client.PutParams{ContentType: f.Type.MIME})
 //
 // # What this package does not do
 //
