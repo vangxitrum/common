@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Changed
+
+**A service now declares which log attributes Elasticsearch indexes, and
+`log.elasticsearch.index-fields` no longer drops the rest.** The sink flattens
+a record's attributes into key-value pairs, as it did, but it now writes them
+to one of two places. A declared attribute goes where Elasticsearch maps it,
+`labels.<name>` or an ECS field; every other attribute goes to `log.extra`,
+which the index template maps with `"enabled": false`. Both are shipped and
+both are in `_source`, so nothing is lost from Discover or from an API
+response - the undeclared half simply adds no field to the mapping and cannot
+be filtered or aggregated on. That is the point: a mapped field stays in the
+mapping for ever, and an index has a field limit, a thousand by default, that a
+service inventing attribute names at runtime reaches on its own.
+
+`IndexFields` empty now takes `logger.DefaultIndexFields`, `service` and
+`role`, where it used to mean "index everything". A dashboard that filtered on
+an attribute nobody declared will stop matching until that attribute is listed,
+and the attribute is still visible in the document meanwhile.
+`GraylogConfig.IndexFields` is unchanged and still drops what it does not list.
+
+**`log.elasticsearch.role`** is stamped on every document as `service.role`:
+what this process does, such as `api`, `worker` or `job-runner`, so a service
+deployed as several of them can be told apart. It is process configuration
+rather than a per-record attribute, because a value that can be forgotten at a
+call site will be. `Service`, `Role` and `Host` are all overridden by a record
+attribute of the same name.
+
+`source`, `error`, the stack trace and `trace_id` are always written where ECS
+puts them whether or not they were declared: they describe the event rather
+than a dimension of it, and a stack trace under an unmapped object is a stack
+trace nobody can search for.
+
+The matching `aioz-monitor` index template gains `log.extra`
+(`"enabled": false`) and `service.role`. The two changes only work as a pair:
+without the template, `log.extra` is dynamically mapped like anything else and
+the field count is no more bounded than before.
+
 ### Fixed
 
 **`logger` logs an error as its message, with a stack you can read.** The

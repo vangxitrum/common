@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,15 +43,53 @@ type ElasticsearchConfig struct {
 	// Timeout is the HTTP request timeout. Defaults to 10s.
 	Timeout time.Duration
 
-	// IndexFields is an allowlist of attribute names to forward. Empty
-	// forwards everything. Mirrors GraylogConfig.IndexFields.
+	// IndexFields names the attributes a service wants to search and
+	// aggregate on. They are written where Elasticsearch maps them: the ones
+	// with an ECS home go there, the rest become labels.<name>, which the
+	// index template maps as a keyword.
+	//
+	// Every other attribute is still shipped, under log.extra, which the
+	// template maps with "enabled": false. It stays in _source, so it is there
+	// in Discover and in an API response, but it creates no mapping entry and
+	// cannot be filtered on. That split is the point: a field the template
+	// maps is a field that exists in the mapping for ever, and an index has a
+	// field limit - a thousand by default - that a service inventing attribute
+	// names at runtime will eventually reach.
+	//
+	// Empty takes [DefaultIndexFields].
+	//
+	// This is not GraylogConfig.IndexFields, which drops what it does not
+	// list.
 	IndexFields []string
 
-	// Service is stamped on every document as service.name, and Host as
-	// host.name. Without them every document in a shared data stream looks
-	// alike, so neither Kibana nor a Grafana panel can split by service.
+	// Service is stamped on every document as service.name, Role as
+	// service.role and Host as host.name. Without them every document in a
+	// shared data stream looks alike, so neither Kibana nor a Grafana panel
+	// can split by service, and "every error from the workers" is not a query
+	// anyone can write.
+	//
+	// Role is what this process does - "api", "worker", "job-runner" - for a
+	// service deployed as several of them. It is fixed for the process rather
+	// than read from each record: a value that can be forgotten at a call site
+	// is one that will be.
 	Service string
+	Role    string
 	Host    string
+}
+
+// DefaultIndexFields are the attributes indexed when IndexFields is empty.
+//
+// Both name a dimension a dashboard splits by rather than a detail of one
+// event, which is what makes them worth a permanent mapping entry.
+var DefaultIndexFields = []string{"service", "role"}
+
+// ecsPaths are the attributes that have a home in ECS, which is where Kibana's
+// built-in views and the logs-* templates look for them. An indexed attribute
+// not named here becomes labels.<name>.
+var ecsPaths = map[string][2]string{
+	"service": {"service", "name"},
+	"role":    {"service", "role"},
+	"host":    {"host", "name"},
 }
 
 // elasticsearchSink ships records to Elasticsearch's _bulk API.
@@ -64,7 +103,7 @@ type elasticsearchSink struct {
 	cfg         ElasticsearchConfig
 	client      *http.Client
 	bulkURL     string
-	indexFields map[string]struct{} // nil means forward all
+	indexFields map[string]struct{} // the attributes worth a mapping entry
 
 	mu      sync.Mutex
 	buf     bytes.Buffer
@@ -95,11 +134,13 @@ func newElasticsearchSink(cfg ElasticsearchConfig) *elasticsearchSink {
 		bulkURL: strings.TrimSuffix(cfg.URL, "/") + "/_bulk",
 		done:    make(chan struct{}),
 	}
-	if len(cfg.IndexFields) > 0 {
-		s.indexFields = make(map[string]struct{}, len(cfg.IndexFields))
-		for _, f := range cfg.IndexFields {
-			s.indexFields[f] = struct{}{}
-		}
+	fields := cfg.IndexFields
+	if len(fields) == 0 {
+		fields = DefaultIndexFields
+	}
+	s.indexFields = make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		s.indexFields[f] = struct{}{}
 	}
 
 	s.wg.Add(1)
@@ -224,27 +265,36 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 		"message":    stripANSI(msg),
 		"log":        map[string]any{"level": ecsLevel(level)},
 	}
+
+	// An api-group record's message is a formatted request line rather than
+	// prose: "GET status:200 latency:002ms url:/readyz". Left alone it is only
+	// full-text searchable, so "all 5xx on /upload" is not a query anyone can
+	// write. The Graylog sink already splits it into discrete fields; this
+	// does the same, into the ECS names Kibana and Grafana both understand.
+	if group, _ := attrs["group"].(string); group == "api" {
+		parseRequestLine(doc, doc["message"].(string))
+	}
 	if s.cfg.Service != "" {
-		doc["service"] = map[string]any{"name": s.cfg.Service}
+		setNestedValue(doc, "service", "name", s.cfg.Service)
+	}
+	if s.cfg.Role != "" {
+		setNestedValue(doc, "service", "role", s.cfg.Role)
 	}
 	if s.cfg.Host != "" {
-		doc["host"] = map[string]any{"name": s.cfg.Host}
+		setNestedValue(doc, "host", "name", s.cfg.Host)
 	}
 
 	labels := make(map[string]any, len(attrs))
+	extra := make(map[string]any, len(attrs))
 	for k, v := range attrs {
 		if k == "logged_at" {
 			continue
 		}
-		if s.indexFields != nil {
-			if _, ok := s.indexFields[k]; !ok {
-				continue
-			}
-		}
 
-		// A handful of attributes have a canonical ECS home. Everything else
-		// goes under labels.*, which the index template maps as a dynamic
-		// object, so a new attribute never needs a mapping change.
+		// These four describe the event itself rather than a dimension of it.
+		// They are always written where ECS puts them, declared or not: a
+		// stack trace filed under log.extra is a stack trace nobody finds, and
+		// a trace id that cannot be searched defeats having one.
 		switch k {
 		case "source":
 			if src, ok := v.(string); ok {
@@ -265,16 +315,21 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 		case "trace_id":
 			doc["trace"] = map[string]any{"id": fmt.Sprint(v)}
 			continue
-		case "service":
-			doc["service"] = map[string]any{"name": fmt.Sprint(v)}
-			continue
-		case "host":
-			doc["host"] = map[string]any{"name": fmt.Sprint(v)}
-			continue
 		}
 
 		if str, ok := v.(string); ok {
-			labels[k] = stripANSI(str)
+			v = stripANSI(str)
+		}
+
+		// Declared: somewhere the template maps, so it can be filtered and
+		// aggregated. Undeclared: log.extra, which the template does not map,
+		// so it is readable but adds no field to the index for ever.
+		if _, ok := s.indexFields[k]; !ok {
+			extra[k] = v
+			continue
+		}
+		if path, ok := ecsPaths[k]; ok {
+			setNestedValue(doc, path[0], path[1], fmt.Sprint(v))
 			continue
 		}
 		labels[k] = v
@@ -282,7 +337,86 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 	if len(labels) > 0 {
 		doc["labels"] = labels
 	}
+	if len(extra) > 0 {
+		doc["log"].(map[string]any)["extra"] = extra
+	}
 	return doc
+}
+
+// setNestedValue writes doc[top][key], creating the object as needed. A record
+// attribute overwrites what the config stamped, because the call site knew
+// something the process-wide setting did not.
+func setNestedValue(doc map[string]any, top, key string, value any) {
+	outer, _ := doc[top].(map[string]any)
+	if outer == nil {
+		outer = map[string]any{}
+		doc[top] = outer
+	}
+	outer[key] = value
+}
+
+// parseRequestLine pulls the fields out of an api-group message and writes
+// them as ECS: the first word is the method, and the rest are key:value pairs.
+// The message itself is left in place - it is what a human reads in Discover.
+//
+// Anything it cannot parse is left alone rather than guessed at: a malformed
+// line should lose its extra fields, not its content.
+func parseRequestLine(doc map[string]any, msg string) {
+	fields := strings.Fields(msg)
+	if len(fields) == 0 {
+		return
+	}
+
+	if isHTTPMethod(fields[0]) {
+		setNested(doc, "http", "request", map[string]any{"method": fields[0]})
+	}
+
+	for _, f := range fields[1:] {
+		key, value, ok := strings.Cut(f, ":")
+		if !ok || value == "" {
+			continue
+		}
+		switch key {
+		case "status":
+			if code, err := strconv.Atoi(value); err == nil {
+				setNested(doc, "http", "response", map[string]any{"status_code": code})
+			}
+		case "url":
+			doc["url"] = map[string]any{"path": value}
+		case "latency":
+			if d, err := time.ParseDuration(value); err == nil {
+				// ECS measures event.duration in nanoseconds.
+				doc["event"] = map[string]any{"duration": d.Nanoseconds()}
+			}
+		}
+	}
+}
+
+// setNested merges sub into doc[top][mid], creating the objects as needed.
+func setNested(doc map[string]any, top, mid string, sub map[string]any) {
+	outer, _ := doc[top].(map[string]any)
+	if outer == nil {
+		outer = map[string]any{}
+		doc[top] = outer
+	}
+	inner, _ := outer[mid].(map[string]any)
+	if inner == nil {
+		inner = map[string]any{}
+		outer[mid] = inner
+	}
+	for k, v := range sub {
+		inner[k] = v
+	}
+}
+
+// isHTTPMethod reports whether s is an HTTP method, so a message that merely
+// starts with a capitalised word does not get one invented for it.
+func isHTTPMethod(s string) bool {
+	switch s {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE":
+		return true
+	}
+	return false
 }
 
 // setError merges one field into the document's error object, which both the

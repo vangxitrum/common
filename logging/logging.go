@@ -64,8 +64,9 @@ type ElasticsearchConfig struct {
 	BatchSize     int           `help:"records buffered before a bulk flush" default:"500"`
 	FlushInterval time.Duration `help:"how often a partial batch is flushed anyway" default:"5s"`
 	Timeout       time.Duration `help:"HTTP request timeout" default:"10s"`
-	IndexFields   []string      `help:"attributes to forward; blank sends all" default:""`
+	IndexFields   []string      `help:"attributes to index for search; every other attribute still ships, under log.extra, unmapped; blank indexes service and role" default:""`
 	Service       string        `help:"service.name on every document; blank uses the hostname" default:""`
+	Role          string        `help:"service.role on every document: what this process does, such as api or worker" default:""`
 }
 
 // SamplingConfig configures per-level count sampling.
@@ -251,6 +252,7 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 			Timeout:       cfg.Elasticsearch.Timeout,
 			IndexFields:   cfg.Elasticsearch.IndexFields,
 			Service:       esService,
+			Role:          cfg.Elasticsearch.Role,
 			Host:          hostname,
 		}
 	}

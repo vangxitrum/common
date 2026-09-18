@@ -162,11 +162,14 @@ func TestElasticsearchSink_DocumentShape(t *testing.T) {
 	origin := doc["log"].(map[string]any)["origin"].(map[string]any)
 	require.Equal(t, "/app/main.go:42", origin["file"].(map[string]any)["name"])
 
-	labels := doc["labels"].(map[string]any)
-	require.Equal(t, "user-1", labels["user_id"])
-	require.Equal(t, float64(3), labels["attempts"])
-	require.NotContains(t, labels, "logged_at", "the timestamp is not also a label")
-	require.NotContains(t, labels, "trace_id", "a field with an ECS home is not duplicated")
+	// user_id and attempts were not declared as index fields, so they ship
+	// under log.extra: readable, but adding nothing to the mapping.
+	extra := doc["log"].(map[string]any)["extra"].(map[string]any)
+	require.Equal(t, "user-1", extra["user_id"])
+	require.Equal(t, float64(3), extra["attempts"])
+	require.NotContains(t, extra, "logged_at", "the timestamp is not also an attribute")
+	require.NotContains(t, extra, "trace_id", "a field with an ECS home is not duplicated")
+	require.NotContains(t, doc, "labels", "nothing here was declared as a label")
 }
 
 func TestElasticsearchSink_ErrorMessageJoinsTheStackTrace(t *testing.T) {
@@ -188,23 +191,161 @@ func TestElasticsearchSink_ErrorMessageJoinsTheStackTrace(t *testing.T) {
 	require.NotContains(t, docs[0], "labels", "nothing should be left over in labels")
 }
 
-func TestElasticsearchSink_IndexFieldsAllowlist(t *testing.T) {
+func TestElasticsearchSink_ParsesApiRequestLine(t *testing.T) {
 	recv := newBulkRecorder(t)
 	cfg := testESConfig(recv.URL)
 	cfg.BatchSize = 1
-	cfg.IndexFields = []string{"keep"}
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(),
+		"GET status:200 latency:2ms url:/readyz",
+		map[string]any{"group": "api", "request_id": "req-1"}))
+
+	_, _, docs := recv.snapshot()
+	doc := docs[0]
+
+	require.Equal(t, "GET", doc["http"].(map[string]any)["request"].(map[string]any)["method"])
+	require.Equal(t, float64(200), doc["http"].(map[string]any)["response"].(map[string]any)["status_code"])
+	require.Equal(t, "/readyz", doc["url"].(map[string]any)["path"])
+	require.Equal(t, float64(2_000_000), doc["event"].(map[string]any)["duration"], "ECS measures duration in nanoseconds")
+
+	// The message survives: it is what a human reads in Discover.
+	require.Equal(t, "GET status:200 latency:2ms url:/readyz", doc["message"])
+	// request_id is not a declared dimension, so it ships under log.extra:
+	// one request id is not something a dashboard splits by, and mapping one
+	// field per request is how an index reaches its field limit.
+	require.Equal(t, "req-1",
+		doc["log"].(map[string]any)["extra"].(map[string]any)["request_id"])
+}
+
+func TestElasticsearchSink_NonApiMessageIsNotParsed(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	// Same shape of message, but not an api-group record: nothing is invented.
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(),
+		"GET status:200 url:/readyz", map[string]any{"group": "worker"}))
+
+	_, _, docs := recv.snapshot()
+	require.NotContains(t, docs[0], "http")
+	require.NotContains(t, docs[0], "url")
+}
+
+func TestElasticsearchSink_MalformedApiLineKeepsItsMessage(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(),
+		"something went sideways status:notanumber latency:forever",
+		map[string]any{"group": "api"}))
+
+	_, _, docs := recv.snapshot()
+	doc := docs[0]
+	require.Equal(t, "something went sideways status:notanumber latency:forever", doc["message"])
+	require.NotContains(t, doc, "http", "an unparseable status must not become a field")
+	require.NotContains(t, doc, "event")
+}
+
+func TestElasticsearchSink_IndexFieldsSplitIndexedFromShipped(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	cfg.IndexFields = []string{"tenant"}
 	sink := newElasticsearchSink(cfg)
 	defer func() { _ = sink.Close() }()
 
 	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "m", map[string]any{
-		"keep": "yes",
-		"drop": "no",
+		"tenant":      "acme",
+		"part_number": 7,
 	}))
 
 	_, _, docs := recv.snapshot()
-	labels := docs[0]["labels"].(map[string]any)
-	require.Equal(t, "yes", labels["keep"])
-	require.NotContains(t, labels, "drop")
+	doc := docs[0]
+
+	require.Equal(t, "acme", doc["labels"].(map[string]any)["tenant"],
+		"a declared attribute is mapped, so it can be filtered and aggregated")
+
+	extra := doc["log"].(map[string]any)["extra"].(map[string]any)
+	require.Equal(t, float64(7), extra["part_number"],
+		"an undeclared attribute is still shipped: it is kept out of the "+
+			"mapping, not out of the document")
+	require.NotContains(t, doc["labels"], "part_number")
+}
+
+func TestElasticsearchSink_DefaultIndexFieldsAreServiceAndRole(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	cfg.IndexFields = nil
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "m", map[string]any{
+		"service": "from-record",
+		"role":    "worker",
+		"other":   "x",
+	}))
+
+	_, _, docs := recv.snapshot()
+	doc := docs[0]
+
+	service := doc["service"].(map[string]any)
+	require.Equal(t, "from-record", service["name"],
+		"a record attribute overrides what the config stamped")
+	require.Equal(t, "worker", service["role"])
+	require.Equal(t, "x", doc["log"].(map[string]any)["extra"].(map[string]any)["other"])
+}
+
+func TestElasticsearchSink_RoleIsStampedOnEveryDocument(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	cfg.Role = "job-runner"
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "m", nil))
+
+	_, _, docs := recv.snapshot()
+	service := docs[0]["service"].(map[string]any)
+	require.Equal(t, "testsvc", service["name"])
+	require.Equal(t, "job-runner", service["role"],
+		"a process deployed as several roles is only tellable apart by this")
+}
+
+func TestElasticsearchSink_StructuralFieldsAreIndexedUndeclared(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	// A declaration that mentions none of them.
+	cfg.IndexFields = []string{"tenant"}
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelError, time.Now(), "m", map[string]any{
+		"trace_id": "trace-1",
+		"error":    "boom",
+		stackKey:   "main.boom\n\t/app/main.go:42",
+		"source":   "/app/main.go:42",
+	}))
+
+	_, _, docs := recv.snapshot()
+	doc := docs[0]
+
+	// These describe the event, not a dimension of it: filing them under an
+	// unmapped object would make a stack trace nobody can search for.
+	require.Equal(t, "trace-1", doc["trace"].(map[string]any)["id"])
+	require.Equal(t, "boom", doc["error"].(map[string]any)["message"])
+	require.Contains(t, doc["error"].(map[string]any)["stack_trace"], "main.boom")
+	require.NotNil(t, doc["log"].(map[string]any)["origin"])
+	require.NotContains(t, doc["log"], "extra")
 }
 
 func TestElasticsearchSink_Auth(t *testing.T) {
