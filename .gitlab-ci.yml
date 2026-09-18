@@ -13,6 +13,21 @@ variables:
   GOLANGCI_LINT_VERSION: "v2.11.4"
   GO_IMAGE: "registry:5000/go:1.25"
 
+# gitlab.internal hosts aioz-depin/go-sdk, which the depin package imports.
+# GOPRIVATE takes that path off proxy.golang.org and sum.golang.org and sends
+# `go mod download` straight to git; the insteadOf rewrites then authenticate
+# it as the job token. Both spellings are rewritten because go resolves the
+# https form while the module's own remote is the ssh one.
+#
+# This depends on the go-sdk project allowing this project's CI_JOB_TOKEN.
+# Without that grant the clone fails with a 403 and every job in the pipeline
+# dies at module download.
+.go-private:
+  before_script:
+    - go env -w GOPRIVATE=gitlab.internal/
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.internal/".insteadOf "https://gitlab.internal/"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.internal/".insteadOf "git@gitlab.internal:"
+
 lint:
   stage: lint
   image: ${GO_IMAGE}
@@ -32,7 +47,9 @@ lint:
     paths:
       - .cache/
   before_script:
+    # git first: the rewrites below are git config, so git has to exist.
     - apt-get update -qq && apt-get install -y -qq curl git
+    - !reference [.go-private, before_script]
     - |
       curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
         | sh -s -- -b "$(go env GOPATH)/bin" "${GOLANGCI_LINT_VERSION}"
@@ -67,6 +84,8 @@ test:
     key: "go-test-$CI_COMMIT_REF_SLUG"
     paths:
       - .cache/
+  before_script:
+    - !reference [.go-private, before_script]
   script:
     - go test ./...
     # Compile, tests included, for a 32-bit target: an untyped constant that
@@ -107,5 +126,7 @@ integration:
     key: "go-integration-$CI_COMMIT_REF_SLUG"
     paths:
       - .cache/
+  before_script:
+    - !reference [.go-private, before_script]
   script:
     - go test -race -timeout 20m ./redis/... ./rabbitmq/... ./postgres/...

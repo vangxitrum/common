@@ -55,6 +55,12 @@ linters:
           list-mode: lax
           files:
             - $all
+            # depin wraps aioz-depin/go-sdk, whose only logging hook takes a
+            # *zap.Logger. slogzap.go is the zapcore.Core that forwards those
+            # entries into slog, so it is the single file that has to import
+            # zap; everything else in depin stays on slog like the rest of the
+            # repo.
+            - "!**/depin/slogzap*.go"
           allow:
             - "log/slog"
           deny:

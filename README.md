@@ -33,6 +33,8 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/rabbitmq`](rabbitmq/README.md) | `rabbitmq` | The AMQP client: a supervised connection with exponential backoff, a topology re-declared on every reconnect, a publisher with per-publish confirms, and a consumer with a bounded worker pool, a dead-letter policy and a graceful drain. |
 | [`aioz-common/postgres`](postgres/README.md) | `postgres` | A configured, observable pgx pool: it pings at startup because `pgxpool.New` returns a pool that has not connected to anything, sends session settings once per connection rather than per query, measures how long callers wait for a connection, and embeds `*pgxpool.Pool` so no query method is wrapped. |
 | [`aioz-common/httpclient`](httpclient/README.md) | `httpclient` | The outbound `*http.Client` with the timeouts, connection pool, redirect policy and metrics `http.DefaultClient` has none of. Pure `net/http`: no server, no router, no framework. Retry is opt-in per call site. |
+| [`aioz-common/depin`](depin/README.md) | `depin` | Files stored and fetched through the depin network, behind a provider-neutral `Storage`. The go-sdk is wrapped rather than used directly: its identifiers live in an internal package no other module may import, it logs through zap, and it reports every failure as a formatted string. So ids cross as `uuid.UUID`, its logs are bridged into the caller's `slog.Logger`, and a failure says whether trying again could help. Needs a `replace` directive; see its README. |
+| [`aioz-common/slack`](slack/README.md) | `slack` | Messages posted to Slack through a provider-neutral `Notifier`. The Web API answers 200 with `{"ok": false}` for most failures, so the body decides and the status only settles the answers that carry no body. A closed set of error codes says whether trying again could help, a `Retry-After` is honored up to a bound, and the bot token is a `secret.Token`. |
 | [`aioz-common/clientip`](clientip/README.md) | `clientip` | The address a request really came from, behind reverse proxies: `X-Forwarded-For` walked from the right past a trusted-proxy list, so a client cannot pick the address it is rate limited and logged by. |
 | [`aioz-common/ratelimit`](ratelimit/README.md) | `ratelimit` | Rate limits shared by every replica: GCRA windows in Redis with an exact Retry-After, a denial that consumes nothing so no one can be locked out on purpose, hashed keys, and a bounded fallback when Redis fails. |
 | [`aioz-common/password`](password/README.md) | `password` | Password storage to OWASP and NIST: argon2id at OWASP's floor, one derivation on every path so response time does not reveal which accounts exist, legacy bcrypt upgraded on login, NFC, and a bound on how many hashes hold memory at once. |
@@ -66,6 +68,8 @@ aioz-common/
 ├── currency/         # exact money and rates
 ├── cycle/            # interval runner
 ├── date/             # UTC month and day boundaries
+├── depin/            # depin network storage client
+│   └── depintest/    # a recording Storage for tests
 ├── errs2/            # cancellation, and error groups
 ├── httpclient/       # the outbound HTTP client
 ├── leak/             # resource-leak tracking
@@ -83,6 +87,8 @@ aioz-common/
 ├── retry/            # exponential backoff with jitter
 ├── secret/           # bearer secrets and their hashes
 ├── signal/           # one-shot errors, lazy channels
+├── slack/            # Slack Web API notifier
+│   └── slacktest/    # a recording Notifier for tests
 ├── slices2/          # Map and its fallible forms
 ├── time2/            # testable clocks and timers
 ├── uuid/             # identifiers
