@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Added
+
+**`logger/zapbridge` joins zap and slog, in both directions.** A service whose
+call sites are zap - because it was written that way, or because a library it
+embeds offers no other hook - can send everything it already logs into this
+module's handler by teeing one `zapcore.Core` onto its root logger, with its
+console output untouched and no call site rewritten. `Handler` is the other
+direction, for handing `lifecycle`, `stats/debug` or `stats/telemetry` a logger
+when the process's own is zap, so their lines take the same format, level and
+sinks as the rest of the process rather than arriving from a second handler.
+
+The entry's time and caller cross with it, so a buffered handler reports when a
+record happened rather than when it was drained; `zap.Error` crosses as the
+error itself, because the handler takes the error value to derive
+`error.stack_trace` and a message string leaves that field empty. A zap logger
+name arrives as the attribute `logger` - `depin`'s SDK bridge, which this
+package replaces, called it `sdk_logger`.
+
+The package is separate from `logger` so that zap enters a consumer's module
+graph only when that consumer asks for it.
+
+**`config.FindConfigDirParam`, `FindIdentityDirParam` and `FindDefaultsParam`.**
+The three flags a service reads out of `os.Args` before flag parsing has
+happened, so a default that expands `$CONFDIR` or a choice of default set can
+be made while the flags are still being declared. Each is `FindFlagEarly` with
+the name filled in.
+
+### Changed
+
+**`errs2.Frames` reads a zeebo/errs v1 error too.** It matched the v2 type
+alone, so a service part-way through the move between them - or one embedding a
+library still on v1 - got no frames from half its errors, and with no frames
+`logger.ErrorStack` has nothing to log and `error.stack_trace` is empty. Both
+versions name the type the same and print the same stack, so both are matched.
+
+**`logging.ElasticsearchConfig`'s `url` and `bearer-token` are no longer
+flags.** They are `noflag:"true"`, so the endpoint and its credential come from
+the config file or the environment. A bearer token passed on a command line is
+readable by every process on the host.
+
+
 ### Changed
 
 **A service now declares which log attributes Elasticsearch indexes, and

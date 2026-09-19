@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // capture returns a logger writing one JSON object per record into buf.
@@ -32,20 +31,6 @@ func lines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 		out = append(out, line)
 	}
 	return out
-}
-
-func TestSlogLevelMapping(t *testing.T) {
-	t.Parallel()
-
-	require.Equal(t, slog.LevelDebug, slogLevel(zapcore.DebugLevel))
-	require.Equal(t, slog.LevelInfo, slogLevel(zapcore.InfoLevel))
-	require.Equal(t, slog.LevelWarn, slogLevel(zapcore.WarnLevel))
-	require.Equal(t, slog.LevelError, slogLevel(zapcore.ErrorLevel))
-
-	// zap has three levels above Error and slog has none.
-	require.Equal(t, slog.LevelError, slogLevel(zapcore.DPanicLevel))
-	require.Equal(t, slog.LevelError, slogLevel(zapcore.PanicLevel))
-	require.Equal(t, slog.LevelError, slogLevel(zapcore.FatalLevel))
 }
 
 // The SDK's fields have to arrive as attributes, whatever their zap type.
@@ -79,7 +64,7 @@ func TestBridgeKeepsTheLoggerName(t *testing.T) {
 
 	got := lines(t, &buf)
 	require.Len(t, got, 1)
-	require.Equal(t, "p2pmonitor", got[0]["sdk_logger"])
+	require.Equal(t, "p2pmonitor", got[0]["logger"])
 	require.Equal(t, "WARN", got[0]["level"])
 }
 
@@ -116,11 +101,4 @@ func TestBridgeLeavesFilteringToSlog(t *testing.T) {
 	got := lines(t, &buf)
 	require.Len(t, got, 1)
 	require.Equal(t, "loud", got[0]["msg"])
-}
-
-func TestFieldsToAttrsIsEmptyForNoFields(t *testing.T) {
-	t.Parallel()
-
-	require.Nil(t, fieldsToAttrs(nil))
-	require.Nil(t, fieldsToAttrs([]zapcore.Field{}))
 }

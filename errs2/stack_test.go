@@ -6,13 +6,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	errsv1 "github.com/zeebo/errs"
 	"github.com/zeebo/errs/v2"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 	"gitlab.internal/tuan.quang.tran/aioz-common/errs2"
 )
 
-var testError = errs.Tag("test")
+var (
+	testError   = errs.Tag("test")
+	testErrorV1 = errsv1.Class("test")
+)
 
 func TestFramesStartWhereTheErrorWasWrapped(t *testing.T) {
 	t.Parallel()
@@ -75,4 +79,28 @@ func TestNoStackWithoutAnErrsError(t *testing.T) {
 	require.Nil(t, errs2.Frames(nil))
 	require.Nil(t, errs2.Origin(errors.New("plain")))
 	require.Nil(t, errs2.Frames(fmt.Errorf("wrapped: %w", errors.New("plain"))))
+}
+
+// Some callers are still on zeebo/errs v1, and a v1 error carries a stack in
+// exactly the same shape, so it is read the same way.
+func TestFramesReadsErrsV1(t *testing.T) {
+	t.Parallel()
+
+	frames := errs2.Frames(testErrorV1.New("boom"))
+
+	require.NotEmpty(t, frames)
+	require.Regexp(t, `errs2_test\.TestFramesReadsErrsV1:\d+$`, frames[0])
+	for _, frame := range frames {
+		require.Regexp(t, `^\S+:\d+$`, frame)
+	}
+}
+
+// A v1 error reached through a wrapper is found too: the chain is walked by
+// type, and both versions answer to it.
+func TestFramesSurviveWrappingAnErrsV1Error(t *testing.T) {
+	t.Parallel()
+
+	base := testErrorV1.New("boom")
+
+	require.Equal(t, errs2.Frames(base), errs2.Frames(fmt.Errorf("context: %w", base)))
 }

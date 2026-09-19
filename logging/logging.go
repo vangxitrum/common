@@ -55,9 +55,9 @@ type GraylogConfig struct {
 // ElasticsearchConfig configures the Elasticsearch bulk sink.
 type ElasticsearchConfig struct {
 	Enabled       bool          `help:"ship logs to Elasticsearch" default:"false"`
-	URL           string        `help:"Elasticsearch base URL, no path" default:""`
+	URL           string        `noflag:"true" help:"Elasticsearch base URL, no path" default:""`
 	DataStream    string        `help:"target data stream; should match the logs-aioz-* index template" default:"logs-aioz-default"`
-	BearerToken   string        `user:"true" help:"bearer token, for a proxy that swaps in the real credentials" default:""`
+	BearerToken   string        `noflag:"true" user:"true" help:"bearer token, for a proxy that swaps in the real credentials" default:""`
 	APIKey        string        `user:"true" help:"Elasticsearch API key, when talking to it directly" default:""`
 	Username      string        `user:"true" help:"basic auth username" default:""`
 	Password      string        `user:"true" help:"basic auth password" default:""`
