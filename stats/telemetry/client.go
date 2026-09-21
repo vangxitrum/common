@@ -19,6 +19,7 @@ import (
 	"github.com/zeebo/errs/v2"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/cycle"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpclient"
 	"gitlab.internal/tuan.quang.tran/aioz-common/stats/monitor"
 )
 
@@ -28,6 +29,26 @@ var (
 
 	mon = monkit.Package()
 )
+
+// pushTransport is the default transport plus HTTP/2 health checks.
+//
+// Without them a connection broken with no TCP reset - which is what an
+// expired NAT entry or a restarted tunnel looks like - stays pooled, and every
+// push multiplexed onto it hangs for the full httpTimeout. Since the loop
+// reuses the same connection, that is not one slow push but a blackout: the
+// receiver stops hearing from this process until the path happens to recover,
+// while a healthy connection completes a push in tens of milliseconds.
+func pushTransport() *http.Transport {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil // never happens; nil means the default, which still works
+	}
+
+	transport = transport.Clone()
+	httpclient.ConfigureH2HealthChecks(transport, 0, 0)
+
+	return transport
+}
 
 // httpTimeout bounds every remote_write POST so a slow or hung receiver can
 // never block the push loop past one interval.
@@ -101,14 +122,17 @@ func NewClient(log *slog.Logger, cfg Config, registry *monkit.Registry, opts ...
 
 	client := &Client{
 		log:      log,
-		http:     &http.Client{Timeout: httpTimeout},
+		http:     &http.Client{Timeout: httpTimeout, Transport: pushTransport()},
 		registry: registry,
 		cfg:      cfg,
-		// Held pre-built and pre-sorted: these three are appended to every
-		// series, and re-sorting the full label set per sample is the hot
-		// path of a push with thousands of series.
+		// Held pre-built and pre-sorted: these are appended to every series,
+		// and re-sorting the full label set per sample is the hot path of a
+		// push with thousands of series. An empty env is dropped here rather
+		// than pushed as "", so a service that does not set it keeps the
+		// label set it had before.
 		extraLabels: nonEmptyLabels(
 			label{Name: "app", Value: cfg.App},
+			label{Name: "env", Value: cfg.Env},
 			label{Name: "instance", Value: instance},
 			label{Name: "role", Value: cfg.Role},
 		),

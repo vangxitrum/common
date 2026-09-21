@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spacemonkeygo/monkit/v3"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 )
 
 // capture is a fake remote_write receiver: it decodes what the client pushed
@@ -90,6 +91,7 @@ func testConfig(url string) Config {
 	return Config{
 		URL:           url,
 		App:           "testapp",
+		Env:           "testenv",
 		Instance:      "testinstance",
 		Role:          "testrole",
 		Interval:      time.Hour,
@@ -114,6 +116,7 @@ func TestClient_PushesMonkitSeries(t *testing.T) {
 	require.True(t, ok, "widgets counter should have been pushed")
 	require.Equal(t, float64(3), got.Samples[0].Value)
 	require.Equal(t, "testapp", labelValue(got, "app"))
+	require.Equal(t, "testenv", labelValue(got, "env"))
 	require.Equal(t, "testinstance", labelValue(got, "instance"))
 	require.Equal(t, "testrole", labelValue(got, "role"))
 	require.NotZero(t, got.Samples[0].Timestamp)
@@ -148,6 +151,7 @@ func TestClient_EmptyLabelsAreDropped(t *testing.T) {
 
 	cfg := testConfig(recv.URL)
 	cfg.Role = "" // a service that does not set a role
+	cfg.Env = ""  // ... nor an environment
 
 	client, err := NewClient(testLogger(), cfg, registry)
 	require.NoError(t, err)
@@ -156,6 +160,7 @@ func TestClient_EmptyLabelsAreDropped(t *testing.T) {
 	for _, s := range recv.series() {
 		for _, l := range s.Labels {
 			require.NotEqual(t, "role", l.Name, "an empty label should not be sent")
+			require.NotEqual(t, "env", l.Name, "an empty label should not be sent")
 		}
 	}
 }
@@ -341,6 +346,7 @@ func TestClient_GathererSeries(t *testing.T) {
 	require.Equal(t, float64(7), got.Samples[0].Value)
 	require.Equal(t, "GET", labelValue(got, "method"))
 	require.Equal(t, "testapp", labelValue(got, "app"), "push labels apply to gathered metrics too")
+	require.Equal(t, "testenv", labelValue(got, "env"), "push labels apply to gathered metrics too")
 
 	sum, ok := find(recv.series(), "http_request_duration_seconds_sum", "")
 	require.True(t, ok)
@@ -361,6 +367,21 @@ func TestClient_GathererSeries(t *testing.T) {
 		}
 	}
 	require.True(t, sawInf, "a +Inf bucket must be emitted")
+}
+
+func TestClient_UsesAHealthCheckedTransport(t *testing.T) {
+	client, err := NewClient(testLogger(), testConfig("http://example.invalid"), monkit.NewRegistry())
+	require.NoError(t, err)
+
+	transport, ok := client.http.Transport.(*http.Transport)
+	require.True(t, ok, "the push client should carry its own transport")
+
+	// The h2 settings are unreachable once attached, but attaching is:
+	// ConfigureTransports refuses to run twice. An error proves health checks
+	// are on, which is what keeps a dead connection from stalling every push
+	// until the deadline.
+	_, err = http2.ConfigureTransports(transport)
+	require.Error(t, err, "http/2 health checks should already be configured")
 }
 
 func TestParseContainerID(t *testing.T) {

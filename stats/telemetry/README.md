@@ -26,6 +26,7 @@ onboarded runs unchanged.
 | `metrics.app` | `""` | the `app` label |
 | `metrics.instance` | hostname | the `instance` label |
 | `metrics.role` | `""` | the `role` label |
+| `metrics.env` | `""` | the `env` label; match the host agent's `AIOZ_ENV` so app and node_exporter series for one deployment select together |
 | `metrics.interval` | `15s` | how often the registry is walked |
 | `metrics.bearer-token` | `""` | `Authorization: Bearer`, wins over basic auth |
 | `metrics.username` / `.password` | `""` | HTTP basic auth |
