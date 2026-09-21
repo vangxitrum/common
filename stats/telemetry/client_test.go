@@ -14,7 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spacemonkeygo/monkit/v3"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpclient"
 )
 
 // capture is a fake remote_write receiver: it decodes what the client pushed
@@ -376,12 +376,14 @@ func TestClient_UsesAHealthCheckedTransport(t *testing.T) {
 	transport, ok := client.http.Transport.(*http.Transport)
 	require.True(t, ok, "the push client should carry its own transport")
 
-	// The h2 settings are unreachable once attached, but attaching is:
-	// ConfigureTransports refuses to run twice. An error proves health checks
-	// are on, which is what keeps a dead connection from stalling every push
-	// until the deadline.
-	_, err = http2.ConfigureTransports(transport)
-	require.Error(t, err, "http/2 health checks should already be configured")
+	// Health checks are what keep a dead pooled connection from stalling every
+	// push until the deadline.
+	require.NotNil(t, transport.HTTP2,
+		"http/2 health checks should already be configured")
+	require.Equal(t,
+		httpclient.DefaultH2HealthCheckInterval, transport.HTTP2.SendPingTimeout)
+	require.Equal(t,
+		httpclient.DefaultH2PingTimeout, transport.HTTP2.PingTimeout)
 }
 
 func TestParseContainerID(t *testing.T) {

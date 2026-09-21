@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpclient"
 )
 
 // bulkRecorder is a fake Elasticsearch: it parses the ndjson bulk body so a
@@ -420,8 +420,12 @@ func TestElasticsearchSink_UsesAHealthCheckedTransport(t *testing.T) {
 
 	// Same reasoning as the telemetry client: this sink posts to the same kind
 	// of endpoint and would stall the same way on a dead pooled connection.
-	_, err := http2.ConfigureTransports(transport)
-	require.Error(t, err, "http/2 health checks should already be configured")
+	require.NotNil(t, transport.HTTP2,
+		"http/2 health checks should already be configured")
+	require.Equal(t,
+		httpclient.DefaultH2HealthCheckInterval, transport.HTTP2.SendPingTimeout)
+	require.Equal(t,
+		httpclient.DefaultH2PingTimeout, transport.HTTP2.PingTimeout)
 }
 
 func TestECSLevel(t *testing.T) {

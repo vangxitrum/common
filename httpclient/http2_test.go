@@ -6,58 +6,94 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpclient"
 )
 
 func TestConfigureH2HealthChecks_Defaults(t *testing.T) {
-	h2, err := httpclient.ConfigureH2HealthChecks(&http.Transport{}, 0, 0)
-	require.NoError(t, err)
+	transport := &http.Transport{}
+	httpclient.ConfigureH2HealthChecks(transport, 0, 0)
 
-	require.Equal(t, httpclient.DefaultH2HealthCheckInterval, h2.ReadIdleTimeout)
-	require.Equal(t, httpclient.DefaultH2PingTimeout, h2.PingTimeout)
+	require.NotNil(t, transport.HTTP2)
+	require.Equal(
+		t,
+		httpclient.DefaultH2HealthCheckInterval,
+		transport.HTTP2.SendPingTimeout,
+	)
+	require.Equal(t,
+		httpclient.DefaultH2PingTimeout, transport.HTTP2.PingTimeout)
 }
 
 func TestConfigureH2HealthChecks_ExplicitValues(t *testing.T) {
-	h2, err := httpclient.ConfigureH2HealthChecks(&http.Transport{}, 3*time.Second, time.Second)
-	require.NoError(t, err)
+	transport := &http.Transport{}
+	httpclient.ConfigureH2HealthChecks(transport, 3*time.Second, time.Second)
 
-	require.Equal(t, 3*time.Second, h2.ReadIdleTimeout)
-	require.Equal(t, time.Second, h2.PingTimeout)
+	require.NotNil(t, transport.HTTP2)
+	require.Equal(t, 3*time.Second, transport.HTTP2.SendPingTimeout)
+	require.Equal(t, time.Second, transport.HTTP2.PingTimeout)
 }
 
 func TestConfigureH2HealthChecks_NegativeFallsBackToDefaults(t *testing.T) {
-	h2, err := httpclient.ConfigureH2HealthChecks(&http.Transport{}, -time.Second, -time.Second)
-	require.NoError(t, err)
+	transport := &http.Transport{}
+	httpclient.ConfigureH2HealthChecks(transport, -time.Second, -time.Second)
 
-	require.Equal(t, httpclient.DefaultH2HealthCheckInterval, h2.ReadIdleTimeout)
-	require.Equal(t, httpclient.DefaultH2PingTimeout, h2.PingTimeout)
+	require.NotNil(t, transport.HTTP2)
+	require.Equal(
+		t,
+		httpclient.DefaultH2HealthCheckInterval,
+		transport.HTTP2.SendPingTimeout,
+	)
+	require.Equal(t,
+		httpclient.DefaultH2PingTimeout, transport.HTTP2.PingTimeout)
+}
+
+func TestConfigureH2HealthChecks_KeepsOtherHTTP2Settings(t *testing.T) {
+	// A caller that already set an HTTP2Config keeps it: only the two ping
+	// fields are ours.
+	transport := &http.Transport{
+		HTTP2: &http.HTTP2Config{MaxConcurrentStreams: 42},
+	}
+	httpclient.ConfigureH2HealthChecks(transport, time.Second, time.Second)
+
+	require.Equal(t, 42, transport.HTTP2.MaxConcurrentStreams)
+	require.Equal(t, time.Second, transport.HTTP2.SendPingTimeout)
 }
 
 func TestTransport_HasHealthChecksOn(t *testing.T) {
+	transport, err := httpclient.Transport(httpclient.Config{
+		H2HealthCheckInterval: 7 * time.Second,
+		H2PingTimeout:         2 * time.Second,
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, transport.HTTP2,
+		"Transport should configure h2 health checks")
+	require.Equal(t, 7*time.Second, transport.HTTP2.SendPingTimeout)
+	require.Equal(t, 2*time.Second, transport.HTTP2.PingTimeout)
+}
+
+func TestTransport_ZeroConfigTakesTheDefaults(t *testing.T) {
 	transport, err := httpclient.Transport(httpclient.Config{})
 	require.NoError(t, err)
 
-	// The settings themselves are unreachable once attached, but attaching is
-	// observable: ConfigureTransports refuses to run twice on one transport.
-	// An error here means Transport already configured h2 - which is the
-	// wiring under test. The values it set are covered by the tests above.
-	_, err = http2.ConfigureTransports(transport)
-	require.Error(t, err,
-		"Transport should have attached an h2 transport with health checks")
+	require.NotNil(t, transport.HTTP2)
+	require.Equal(
+		t,
+		httpclient.DefaultH2HealthCheckInterval,
+		transport.HTTP2.SendPingTimeout,
+	)
+	require.Equal(t,
+		httpclient.DefaultH2PingTimeout, transport.HTTP2.PingTimeout)
 }
 
 func TestOneShotTransport_LeavesHealthChecksOff(t *testing.T) {
 	// It disables keep-alives, so there is no pooled connection to go stale
-	// and nothing for a ping to protect. Configuring h2 here must therefore
-	// still be possible: that is what proves the pooled profile is the only
-	// one touched.
+	// and nothing for a ping to protect. Leaving HTTP2 untouched is what
+	// proves the pooled profile is the only one configured.
 	transport, err := httpclient.OneShotTransport(httpclient.Config{})
 	require.NoError(t, err)
-	require.True(t, transport.DisableKeepAlives)
 
-	h2, err := http2.ConfigureTransports(transport)
-	require.NoError(t, err, "OneShotTransport should not have attached h2 itself")
-	require.Zero(t, h2.ReadIdleTimeout, "and so should not have set any ping interval")
+	require.True(t, transport.DisableKeepAlives)
+	require.Nil(t, transport.HTTP2,
+		"OneShotTransport should not configure h2 health checks")
 }
