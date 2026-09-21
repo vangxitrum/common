@@ -31,9 +31,8 @@ require (
 	github.com/zeebo/errs v1.4.0
 	github.com/zeebo/errs/v2 v2.0.5
 	github.com/zeebo/structs v1.0.3-0.20230601144555-f2db46069602
-	gitlab.internal/aioz-depin/go-sdk v0.0.0-20260917100839-e2ee142da530
+	gitlab.internal/aioz-depin/go-sdk v0.0.0-20260921091215-1bd734670d17
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/text v0.42.0
 	google.golang.org/grpc v1.83.1
@@ -186,6 +185,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
 	golang.org/x/time v0.12.0 // indirect
@@ -197,5 +197,3 @@ require (
 )
 
 replace github.com/gogo/protobuf => github.com/regen-network/protobuf v1.3.3-alpha.regen.1
-
-replace gitlab.internal/aioz-depin/go-sdk => /home/tuan/work/depin-workspace/go-sdk-slog
