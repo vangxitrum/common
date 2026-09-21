@@ -92,6 +92,32 @@ func NewServerWithLevel(
 	logLevel *slog.LevelVar,
 	extensions ...Extension,
 ) *Server {
+	var handler http.Handler
+	if logLevel != nil {
+		handler = levelHandler(logLevel)
+	}
+	return NewServerWithLevelHandler(
+		log,
+		listener,
+		registry,
+		config,
+		handler,
+		extensions...,
+	)
+}
+
+// NewServerWithLevelHandler is NewServerWithLevel for a process whose level
+// does not live in an *slog.LevelVar - one logging through another library,
+// bridged in, where that library's own level is the one that decides what is
+// written. It serves logging at /logging, or omits the endpoint when nil.
+func NewServerWithLevelHandler(
+	log *slog.Logger,
+	listener net.Listener,
+	registry *monkit.Registry,
+	config Config,
+	logging http.Handler,
+	extensions ...Extension,
+) *Server {
 	server := &Server{
 		log:      log,
 		listener: listener,
@@ -152,15 +178,15 @@ func NewServerWithLevel(
 		},
 	)
 
-	if logLevel != nil {
-		server.mux.HandleFunc("/logging", levelHandler(logLevel))
+	if logging != nil {
+		server.mux.Handle("/logging", logging)
 	}
 	for _, ext := range extensions {
 		server.mux.HandleFunc(ext.Path(), ext.Handler)
 	}
 	server.mux.HandleFunc(
 		"/",
-		indexPage(config.Control, logLevel != nil, extensions),
+		indexPage(config.Control, logging != nil, extensions),
 	)
 
 	return server
