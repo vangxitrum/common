@@ -11,7 +11,7 @@ turn derive from Storj. See [Differences from depin](#differences-from-depin).
 
 ## Requirements
 
-- Go 1.25
+- Go 1.26
 - `cobra` for the command tree; `viper` and `pflag` come with it
 
 ## Installation

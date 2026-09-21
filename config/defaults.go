@@ -83,6 +83,26 @@ func SetupFlag(
 	}
 }
 
+// FindConfigDirParam returns the --config-dir value from os.Args, before flag
+// parsing has happened, so a default that expands $CONFDIR can be built.
+func FindConfigDirParam() string {
+	return FindFlagEarly("config-dir")
+}
+
+// FindIdentityDirParam returns the --identity-dir value from os.Args, before
+// flag parsing has happened, so a default that expands $IDENTITYDIR can be
+// built.
+func FindIdentityDirParam() string {
+	return FindFlagEarly("identity-dir")
+}
+
+// FindDefaultsParam returns the --defaults value from os.Args, before flag
+// parsing has happened, so the dev/release/test default set is known while the
+// flags are still being declared.
+func FindDefaultsParam() string {
+	return FindFlagEarly("defaults")
+}
+
 // FindFlagEarly retrieves the value of a flag from os.Args before flag parsing
 // has happened. Under `go test` os.Args holds the test binary's own flags, so
 // tests should call FindFlagIn directly.

@@ -92,6 +92,31 @@ func NewServerWithLevel(
 	logLevel *slog.LevelVar,
 	extensions ...Extension,
 ) *Server {
+	var handler http.Handler
+	if logLevel != nil {
+		handler = levelHandler(logLevel)
+	}
+	return NewServerWithLevelHandler(
+		log,
+		listener,
+		registry,
+		config,
+		handler,
+		extensions...,
+	)
+}
+
+// NewServerWithLevelHandler is NewServerWithLevel for a process whose level
+// does not live in an *slog.LevelVar, or that wants its own /logging
+// protocol. It serves logging at /logging, or omits the endpoint when nil.
+func NewServerWithLevelHandler(
+	log *slog.Logger,
+	listener net.Listener,
+	registry *monkit.Registry,
+	config Config,
+	logging http.Handler,
+	extensions ...Extension,
+) *Server {
 	server := &Server{
 		log:      log,
 		listener: listener,
@@ -152,15 +177,15 @@ func NewServerWithLevel(
 		},
 	)
 
-	if logLevel != nil {
-		server.mux.HandleFunc("/logging", levelHandler(logLevel))
+	if logging != nil {
+		server.mux.Handle("/logging", logging)
 	}
 	for _, ext := range extensions {
 		server.mux.HandleFunc(ext.Path(), ext.Handler)
 	}
 	server.mux.HandleFunc(
 		"/",
-		indexPage(config.Control, logLevel != nil, extensions),
+		indexPage(config.Control, logging != nil, extensions),
 	)
 
 	return server
@@ -208,7 +233,7 @@ func indexPage(
 		if writeLogging {
 			line("<dt>", htmlLink("/logging"), "</dt>")
 			line(
-				"<dd>JSON endpoint can report or change the current logging level (https://pkg.go.dev/go.uber.org/zap#AtomicLevel.ServeHTTP)</dd>",
+				"<dd>GET reports the current logging level; PUT with a level (DEBUG, INFO, WARN, ERROR) as the body changes it</dd>",
 			)
 		}
 		for _, ext := range extensions {

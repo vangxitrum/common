@@ -1,8 +1,11 @@
 package logging_test
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -103,4 +106,91 @@ func shutdown(handler interface{ Shutdown(context.Context) error }) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return handler.Shutdown(ctx)
+}
+
+func TestWithOutputRedirectsTheConsole(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	h, _, err := logging.New(logging.Config{Level: "info", Format: "text"}, logging.WithOutput(&buf))
+	require.NoError(t, err)
+
+	slog.New(h).Info("redirected")
+	require.NoError(t, h.Shutdown(context.Background()))
+
+	require.Contains(t, buf.String(), "redirected")
+}
+
+// A URL with no scheme parses and binds, and then every push fails at the
+// transport with nothing in the configuration to point at.
+func TestValidateRejectsAnElasticsearchURLWithoutAScheme(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaults()
+	cfg.Elasticsearch.Enabled = true
+	cfg.Elasticsearch.URL = "es.example:9200"
+
+	require.ErrorContains(t, cfg.Validate(), "http")
+}
+
+func TestValidateAcceptsBothSchemes(t *testing.T) {
+	t.Parallel()
+
+	for _, url := range []string{"http://es.example:9200", "https://es.example"} {
+		cfg := defaults()
+		cfg.Elasticsearch.Enabled = true
+		cfg.Elasticsearch.URL = url
+
+		require.NoError(t, cfg.Validate(), url)
+	}
+}
+
+// custom-level holds named components to their own minimum level.
+func TestCustomLevelQuietensAComponent(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	cfg := defaults()
+	cfg.Level = "debug"
+	cfg.CustomLevel = "audit=warn, relay=error"
+	h, _, err := logging.New(cfg, logging.WithOutput(&buf))
+	require.NoError(t, err)
+
+	log := slog.New(h)
+	log.With("component", "audit").Info("audit chatter")
+	log.With("component", "relay").Warn("relay warning")
+	log.With("component", "worker").Debug("worker detail")
+	require.NoError(t, h.Shutdown(context.Background()))
+
+	require.NotContains(t, buf.String(), "audit chatter")
+	require.NotContains(t, buf.String(), "relay warning")
+	require.Contains(t, buf.String(), "worker detail")
+}
+
+func TestValidateRejectsABadCustomLevel(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []string{"audit", "audit=loud", "=warn"} {
+		cfg := defaults()
+		cfg.CustomLevel = bad
+		require.Error(t, cfg.Validate(), bad)
+	}
+}
+
+// output selects stderr or a file as well as stdout.
+func TestOutputWritesToAFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "out.log")
+	cfg := defaults()
+	cfg.Output = path
+	h, _, err := logging.New(cfg)
+	require.NoError(t, err)
+
+	slog.New(h).Info("to a file")
+	require.NoError(t, h.Shutdown(context.Background()))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "to a file")
 }

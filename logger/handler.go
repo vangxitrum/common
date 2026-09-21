@@ -156,7 +156,7 @@ func (h *consoleHandler) writeConsole(level slog.Level, t time.Time, msg, src st
 	sb.WriteString(colorize(white, msg))
 	if src != "" {
 		sb.WriteByte(' ')
-		sb.WriteString(colorize(darkGray, "src="+src))
+		sb.WriteString(colorize(darkGray, "src="+shortSource(src)))
 	}
 	var stack string
 	for k, v := range attrs {
@@ -283,4 +283,18 @@ func colorize(code int, s string) string {
 
 func colorizeBold(code int, s string) string {
 	return "\033[1;" + strconv.Itoa(code) + "m" + s + reset
+}
+
+// shortSource trims a "path/to/pkg/file.go:line" source to its last directory
+// and file, "pkg/file.go:line", for the text console, where the full path of
+// a checkout is noise on every line. JSON and the sinks keep the full path.
+func shortSource(src string) string {
+	i := strings.LastIndexByte(src, '/')
+	if i < 0 {
+		return src
+	}
+	if j := strings.LastIndexByte(src[:i], '/'); j >= 0 {
+		return src[j+1:]
+	}
+	return src
 }

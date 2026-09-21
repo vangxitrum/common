@@ -22,6 +22,12 @@ func Transport(config Config) (*http.Transport, error) {
 	transport.MaxIdleConns = config.MaxIdleConns
 	transport.MaxConnsPerHost = config.MaxConnsPerHost
 
+	// Only the pooled profile needs this: OneShotTransport keeps no
+	// connections, so it can never reuse a dead one.
+	ConfigureH2HealthChecks(
+		transport, config.H2HealthCheckInterval, config.H2PingTimeout,
+	)
+
 	transport.MaxIdleConnsPerHost = config.MaxIdleConnsPerHost
 	if transport.MaxIdleConnsPerHost <= 0 {
 		// The standard library keeps two. At any real concurrency that means

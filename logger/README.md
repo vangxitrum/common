@@ -249,7 +249,12 @@ logger.Config{
         DataStream:  "logs-aioz-backend",
         BearerToken: "...",       // or APIKey, or Username/Password
         Service:     "backend",   // service.name on every document
+        Role:        "api",       // service.role on every document
         Host:        "vps-1",     // host.name on every document
+
+        // The attributes worth a permanent mapping entry. Everything else
+        // still ships, under log.extra, unmapped.
+        IndexFields: []string{"service", "role", "env", "region"},
     },
 }
 ```
@@ -258,8 +263,58 @@ Documents are ECS-shaped, so a Kibana data view over `logs-aioz-*` works
 without configuring fields: `@timestamp`, `message`, `log.level`
 (`DEBUG`/`INFO`/`WARN`/`ERROR`/`CRITICAL`), `log.origin.file.name` from
 `AddSource`, `error.message` and `error.stack_trace` from an `error` attribute
-and `logger.Critical`, `trace.id` from a `trace_id` attribute, and everything
-else under `labels.*`. ANSI coloring is stripped.
+and `logger.Critical`, and `trace.id` from a `trace_id` attribute. ANSI
+coloring is stripped.
+
+### A service declares what it searches by
+
+The record's attributes are flattened into key-value pairs before they reach a
+sink - a group logs as `outer.inner`, a `LogValuer` is resolved, `ReplaceAttr`
+has already run - and the sink then has to decide where each pair goes.
+
+`IndexFields` is that decision. A declared attribute is written where
+Elasticsearch maps it, as `labels.<name>` or, for a name with an ECS home, that
+field. Everything else is written to `log.extra`, which the index template maps
+with `"enabled": false`.
+
+```
+{
+  "@timestamp": "...",
+  "message": "upload failed",
+  "service": { "name": "backend", "role": "api" },
+  "labels":  { "env": "prod" },            <- declared: keyword, filterable
+  "log": { "level": "ERROR", "extra": {    <- everything else: stored, unmapped
+      "attempt": 3,
+      "part_number": 7
+  }}
+}
+```
+
+Both halves are shipped. The difference is the mapping: a field Elasticsearch
+maps is a field that stays in the mapping for ever, and an index has a field
+limit - a thousand by default - that a service inventing attribute names at
+runtime will eventually reach. `log.extra` is in `_source`, so it is there in
+Discover and in an API response; it just cannot be filtered or aggregated on.
+
+`IndexFields` empty takes `logger.DefaultIndexFields`, which is `service` and
+`role`. Both name a dimension a dashboard splits by rather than a detail of one
+event, which is what earns a permanent mapping entry. `env`, `region` and
+`group` are the usual additions. A request id is usually not one: there is one
+value per request, and correlation is what `trace.id` is for.
+
+Four attributes are always written where ECS puts them, declared or not:
+`source`, `error`, the stack trace, and `trace_id`. They describe the event
+rather than a dimension of it, and a stack trace filed under an unmapped object
+is a stack trace nobody can search for.
+
+`Service`, `Role` and `Host` are stamped on every document from the config. A
+record attribute of the same name wins, because the call site knew something
+the process-wide setting did not. `Role` is fixed for the process - `api`,
+`worker`, `job-runner` - so that a service deployed as several of them can be
+told apart; it is config rather than a per-record attribute because a value
+that can be forgotten at a call site will be.
+
+This is not `GraylogConfig.IndexFields`, which drops what it does not list.
 
 Unlike the Graylog sink, which POSTs one record at a time, this one batches:
 `BatchSize` records (default 500) or `FlushInterval` (default 5s), whichever

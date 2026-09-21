@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 )
 
@@ -30,6 +31,10 @@ type Config struct {
 	// dropped. logging.RedactAttr is the one services use.
 	ReplaceAttr func(groups []string, a slog.Attr) slog.Attr
 
+	// Output is where the console format is written. Defaults to os.Stdout;
+	// io.Discard keeps the sinks and silences the console.
+	Output io.Writer
+
 	// AsyncBufferSize is the record channel capacity for non-blocking dispatch.
 	// 0 is treated as 4096. When full, new records are dropped.
 	AsyncBufferSize int
@@ -46,7 +51,22 @@ type Config struct {
 	// Elasticsearch, if set, ships logs to an Elasticsearch data stream
 	// through the bulk API.
 	Elasticsearch *ElasticsearchConfig
+
+	// ComponentLevels holds a minimum level per component: a record whose
+	// "component" attribute names one of these is written only at or above
+	// that level, whatever the process level is. It is how one noisy part of a
+	// service is quietened without losing the rest of its debug output.
+	//
+	// The innermost component wins, as it does for a nested named logger: a
+	// logger made With("component", "a").With("component", "b") is held to
+	// b's level, or to none if b has no entry.
+	ComponentLevels map[string]slog.Level
 }
+
+// componentKey is the attribute a component is named by. It is the key this
+// module's own packages use - lifecycle, stats/debug - so a service that
+// follows them gets per-component levels for free.
+const componentKey = "component"
 
 // Handler is a slog.Handler that adds async dispatch, buffered file output,
 // Graylog and Elasticsearch shipping, and per-level sampling on top of the
@@ -61,6 +81,14 @@ type Handler struct {
 	inner slog.Handler
 	async *asyncHandler
 	sinks []Sink
+
+	// levels is Config.ComponentLevels. threshold is the level this logger's
+	// component is held to, or nil when it has no component or its component
+	// has no entry. inGroup is set once WithGroup has been called: a
+	// "component" attribute inside a group names something else.
+	levels    map[string]slog.Level
+	threshold *slog.Level
+	inGroup   bool
 }
 
 // New constructs a Handler from cfg. Always call Shutdown before process exit.
@@ -91,6 +119,9 @@ func New(cfg Config) (*Handler, error) {
 	}
 
 	console := newConsoleHandler(cfg.Level, cfg.Format, cfg.AddSource, sinks)
+	if cfg.Output != nil {
+		console.out = cfg.Output
+	}
 	console.replace = cfg.ReplaceAttr
 	var h slog.Handler = console
 
@@ -101,30 +132,69 @@ func New(cfg Config) (*Handler, error) {
 	async := newAsyncHandler(h, cfg.AsyncBufferSize)
 
 	return &Handler{
-		inner: async,
-		async: async,
-		sinks: sinks,
+		inner:  async,
+		async:  async,
+		sinks:  sinks,
+		levels: cfg.ComponentLevels,
 	}, nil
 }
 
 // Enabled implements slog.Handler.
 func (h *Handler) Enabled(ctx context.Context, level slog.Level) bool {
+	if h.threshold != nil && level < *h.threshold {
+		return false
+	}
 	return h.inner.Enabled(ctx, level)
 }
 
 // Handle implements slog.Handler.
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
+	// A component on the record itself is innermost of all.
+	if len(h.levels) > 0 && !h.inGroup {
+		var component string
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == componentKey {
+				component = a.Value.String()
+			}
+			return true
+		})
+		if component != "" {
+			if min, ok := h.levels[component]; ok && r.Level < min {
+				return nil
+			}
+		}
+	}
 	return h.inner.Handle(ctx, r)
 }
 
 // WithAttrs implements slog.Handler.
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &Handler{inner: h.inner.WithAttrs(attrs), async: h.async, sinks: h.sinks}
+	clone := *h
+	clone.inner = h.inner.WithAttrs(attrs)
+	if len(h.levels) > 0 && !h.inGroup {
+		for _, a := range attrs {
+			if a.Key != componentKey {
+				continue
+			}
+			// The last one wins, and a component with no entry clears the
+			// threshold an outer one set.
+			clone.threshold = nil
+			if min, ok := h.levels[a.Value.String()]; ok {
+				clone.threshold = &min
+			}
+		}
+	}
+	return &clone
 }
 
 // WithGroup implements slog.Handler.
 func (h *Handler) WithGroup(name string) slog.Handler {
-	return &Handler{inner: h.inner.WithGroup(name), async: h.async, sinks: h.sinks}
+	clone := *h
+	clone.inner = h.inner.WithGroup(name)
+	if name != "" {
+		clone.inGroup = true
+	}
+	return &clone
 }
 
 // Shutdown drains the async queue then flushes and closes all sinks.

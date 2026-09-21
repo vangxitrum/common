@@ -85,18 +85,12 @@ The codes are `invalid`, `auth`, `permission`, `not_found`, `conflict`,
 `exhausted`, `rate_limited`, `unavailable` and `transport`. The set is closed,
 so a metric can be tagged with one.
 
-## The SDK's logs are bridged, not discarded
+## The SDK's logs reach the caller's handler
 
-`WithLogger(*zap.Logger)` is the SDK's only logging hook. `slogzap.go` is a
-`zapcore.Core` that forwards every entry into the caller's `*slog.Logger`, so
-the SDK's retry warnings, stalled-piece reports and per-transfer summary reach
-the same handler, level and redaction as the rest of the process. It is the one
-file in this repo that imports zap, and `.golangci.yml` waives the
-`enforce-slog` rule for it by name.
-
-The core is enabled at debug and lets slog decide the level, so the debug
-server's `/logging` endpoint can turn the SDK's lines back on without a
-restart.
+`WithLogger` takes the caller's `*slog.Logger`, so the SDK's retry warnings,
+stalled-piece reports and per-transfer summary reach the same handler, level
+and redaction as the rest of the process, and the debug server's `/logging`
+endpoint turns them on and off with everything else.
 
 ## Nothing here logs a filename
 

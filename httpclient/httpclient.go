@@ -69,6 +69,12 @@ type Config struct {
 	DisableCompression bool `help:"do not ask for gzip; only for a caller that decompresses itself" default:"false"`
 	ForceHTTP2         bool `help:"offer http/2 in the tls handshake"                               default:"true"`
 
+	// An h2 connection broken without a TCP reset stays in the pool looking
+	// healthy, and every request on it hangs until its deadline. Pings
+	// retire it instead. Go leaves this off by default.
+	H2HealthCheckInterval time.Duration `help:"ping an idle http/2 connection after this long; 0 uses 15s"     default:"15s"`
+	H2PingTimeout         time.Duration `help:"close an http/2 connection when a health ping goes unanswered" default:"5s"`
+
 	TLSMinVersion string `help:"minimum tls version, 1.2 or 1.3"                     default:"1.2"`
 	TLSSkipVerify bool   `help:"do not verify the server certificate; test use only" default:"false" hidden:"true"`
 

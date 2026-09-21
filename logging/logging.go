@@ -6,6 +6,7 @@
 package logging
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -24,6 +25,9 @@ type Config struct {
 	AsyncBufferSize int    `help:"records buffered before dropping starts" default:"4096"`
 
 	Redact []string `help:"attribute keys whose values are logged as [redacted], beyond the built-in password, token, authorization, cookie and api_key family" default:""`
+
+	Output      string `help:"where the console format is written: stdout, stderr, or a file path" default:""`
+	CustomLevel string `help:"per-component minimum levels as COMPONENT=LEVEL pairs, e.g. audit=warn,relay=error; a component is the \"component\" attribute" default:""`
 
 	File          FileConfig
 	Graylog       GraylogConfig
@@ -55,17 +59,18 @@ type GraylogConfig struct {
 // ElasticsearchConfig configures the Elasticsearch bulk sink.
 type ElasticsearchConfig struct {
 	Enabled       bool          `help:"ship logs to Elasticsearch" default:"false"`
-	URL           string        `help:"Elasticsearch base URL, no path" default:""`
+	URL           string        `noflag:"true" help:"Elasticsearch base URL, no path" default:""`
 	DataStream    string        `help:"target data stream; should match the logs-aioz-* index template" default:"logs-aioz-default"`
-	BearerToken   string        `user:"true" help:"bearer token, for a proxy that swaps in the real credentials" default:""`
+	BearerToken   string        `noflag:"true" user:"true" help:"bearer token, for a proxy that swaps in the real credentials" default:""`
 	APIKey        string        `user:"true" help:"Elasticsearch API key, when talking to it directly" default:""`
 	Username      string        `user:"true" help:"basic auth username" default:""`
 	Password      string        `user:"true" help:"basic auth password" default:""`
 	BatchSize     int           `help:"records buffered before a bulk flush" default:"500"`
 	FlushInterval time.Duration `help:"how often a partial batch is flushed anyway" default:"5s"`
 	Timeout       time.Duration `help:"HTTP request timeout" default:"10s"`
-	IndexFields   []string      `help:"attributes to forward; blank sends all" default:""`
+	IndexFields   []string      `help:"attributes to index for search; every other attribute still ships, under log.extra, unmapped; blank indexes service and role" default:""`
 	Service       string        `help:"service.name on every document; blank uses the hostname" default:""`
+	Role          string        `help:"service.role on every document: what this process does, such as api or worker" default:""`
 }
 
 // SamplingConfig configures per-level count sampling.
@@ -136,6 +141,50 @@ func ParseFormat(name string) (logger.Format, error) {
 		name, strings.Join(Formats(), ", "))
 }
 
+// ParseCustomLevel parses COMPONENT=LEVEL pairs separated by commas.
+func ParseCustomLevel(spec string) (map[string]slog.Level, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
+	}
+	levels := make(map[string]slog.Level)
+	for _, pair := range strings.Split(spec, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(pair, "=")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !ok || name == "" {
+			return nil, Error.Errorf("custom level %q: want COMPONENT=LEVEL", pair)
+		}
+		level, err := ParseLevel(value)
+		if err != nil {
+			return nil, Error.Errorf("custom level %q: %v", pair, err)
+		}
+		levels[name] = level
+	}
+	return levels, nil
+}
+
+// openOutput resolves Output to a writer: empty or stdout is the handler's
+// default, stderr is os.Stderr, anything else is a file appended to. The file
+// is the process's console and stays open for the life of the process.
+func openOutput(output string) (io.Writer, error) {
+	switch strings.TrimSpace(output) {
+	case "", "stdout":
+		return nil, nil
+	case "stderr":
+		return os.Stderr, nil
+	default:
+		f, err := os.OpenFile(output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, Error.Wrap(err)
+		}
+		return f, nil
+	}
+}
+
 // Validate reports settings that bind and parse but cannot work.
 func (c Config) Validate() error {
 	if _, err := ParseLevel(c.Level); err != nil {
@@ -144,9 +193,19 @@ func (c Config) Validate() error {
 	if _, err := ParseFormat(c.Format); err != nil {
 		return err
 	}
+	if _, err := ParseCustomLevel(c.CustomLevel); err != nil {
+		return err
+	}
 	if c.Elasticsearch.Enabled {
 		if c.Elasticsearch.URL == "" {
 			return Error.Errorf("log.elasticsearch.url is required when log.elasticsearch.enabled is true")
+		}
+		if !strings.HasPrefix(c.Elasticsearch.URL, "http://") &&
+			!strings.HasPrefix(c.Elasticsearch.URL, "https://") {
+			// Without a scheme the sink builds a request that cannot be sent,
+			// and the failure arrives once per flush, at the transport, with
+			// nothing in the configuration to point at.
+			return Error.Errorf("log.elasticsearch.url must start with http:// or https://")
 		}
 		if strings.HasSuffix(strings.TrimSuffix(c.Elasticsearch.URL, "/"), "/_bulk") {
 			return Error.Errorf("log.elasticsearch.url is the base URL; the sink appends /_bulk itself")
@@ -177,11 +236,25 @@ func Bootstrap() *slog.Logger {
 	}))
 }
 
+// Option adjusts what New builds, for the parts of a handler that are not
+// configuration: a writer is the process's own, not something an operator
+// sets in a file.
+type Option func(*logger.Config)
+
+// WithOutput sends the console format to w instead of os.Stdout.
+//
+// Config.Output covers stdout, stderr and a file path; this is for a writer
+// the process already holds - a test's buffer, or io.Discard for a process
+// that wants the handler for its sinks alone.
+func WithOutput(w io.Writer) Option {
+	return func(lc *logger.Config) { lc.Output = w }
+}
+
 // New builds the real logger. The returned LevelVar is what the debug server's
 // /logging endpoint mutates, so the level can be retuned at runtime without a
 // restart; the returned Handler must be Shutdown before exit or buffered
 // records are lost.
-func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
+func New(cfg Config, opts ...Option) (*logger.Handler, *slog.LevelVar, error) {
 	level, err := ParseLevel(cfg.Level)
 	if err != nil {
 		return nil, nil, Error.Wrap(err)
@@ -193,6 +266,14 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 	if err != nil {
 		return nil, nil, Error.Wrap(err)
 	}
+	componentLevels, err := ParseCustomLevel(cfg.CustomLevel)
+	if err != nil {
+		return nil, nil, err
+	}
+	output, err := openOutput(cfg.Output)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Level is the LevelVar itself, not its current value, so /logging takes
 	// effect on the running handler.
@@ -202,6 +283,8 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 		AddSource:       cfg.AddSource,
 		AsyncBufferSize: cfg.AsyncBufferSize,
 		ReplaceAttr:     RedactAttr(cfg.Redact...),
+		Output:          output,
+		ComponentLevels: componentLevels,
 	}
 
 	if cfg.File.Enabled {
@@ -251,6 +334,7 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 			Timeout:       cfg.Elasticsearch.Timeout,
 			IndexFields:   cfg.Elasticsearch.IndexFields,
 			Service:       esService,
+			Role:          cfg.Elasticsearch.Role,
 			Host:          hostname,
 		}
 	}
@@ -261,6 +345,10 @@ func New(cfg Config) (*logger.Handler, *slog.LevelVar, error) {
 			Initial:    cfg.Sampling.Initial,
 			Thereafter: cfg.Sampling.Thereafter,
 		}
+	}
+
+	for _, opt := range opts {
+		opt(&lc)
 	}
 
 	handler, err := logger.New(lc)

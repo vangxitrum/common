@@ -2,6 +2,101 @@
 
 ## Unreleased
 
+### Added
+
+**`logger/logtest`: loggers for tests.** `New(t)` writes every record into the
+test's own log, so a failing test prints what the code under test logged and a
+passing one prints nothing. `NewRecorder` keeps every record - message, level
+and attributes flattened to dotted keys, errors kept as errors - so a test can
+assert that a line was written and with what, which is what zap's
+`zaptest/observer` was used for.
+
+**Per-component levels: `logger.Config.ComponentLevels` and
+`logging.Config.CustomLevel`.** A record whose `component` attribute - the key
+`lifecycle` and `stats/debug` already use - names a listed component is written
+only at or above that component's level, so one noisy part of a service can be
+quietened without losing the rest of its debug output. The innermost component
+wins, as with a nested zap `Named`. Configured as `custom-level:
+audit=warn,relay=error`.
+
+**`logging.Config.Output`: stdout, stderr or a file path** for the console
+format, and **`logger.Config.Output` / `logging.WithOutput`** to hand it a
+writer directly.
+
+**`stats/debug.NewServerWithLevelHandler`** serves `/logging` from any
+`http.Handler`, for a process whose level does not live in an `*slog.LevelVar`
+or that wants its own `/logging` protocol.
+
+**`config.FindConfigDirParam`, `FindIdentityDirParam` and `FindDefaultsParam`.**
+The three flags a service reads out of `os.Args` before flag parsing has
+happened, so a default that expands `$CONFDIR` or a choice of default set can
+be made while the flags are still being declared. Each is `FindFlagEarly` with
+the name filled in.
+
+### Changed
+
+**`depin` hands the go-sdk the caller's `*slog.Logger` directly.** The go-sdk
+now logs through `log/slog`, so the zap core that bridged its lines into the
+caller's handler is gone, and this module no longer imports zap anywhere. It
+stays in `go.mod` only as an indirect dependency of libp2p.
+
+**The text console names a source as `pkg/file.go:line`**, not by the absolute
+path of whatever checkout built the binary. JSON output and the sinks keep the
+full path.
+
+**`logging.Config.Validate` rejects an Elasticsearch URL with no scheme.** It
+used to bind, build a sink, and then fail once per flush at the transport, with
+nothing pointing back at the configuration.
+
+**`errs2.Frames` reads a zeebo/errs v1 error too.** It matched the v2 type
+alone, so a service part-way through the move between them - or one embedding a
+library still on v1 - got no frames from half its errors, and with no frames
+`logger.ErrorStack` has nothing to log and `error.stack_trace` is empty. Both
+versions name the type the same and print the same stack, so both are matched.
+
+**`logging.ElasticsearchConfig`'s `url` and `bearer-token` are no longer
+flags.** They are `noflag:"true"`, so the endpoint and its credential come from
+the config file or the environment. A bearer token passed on a command line is
+readable by every process on the host.
+
+
+### Changed
+
+**A service now declares which log attributes Elasticsearch indexes, and
+`log.elasticsearch.index-fields` no longer drops the rest.** The sink flattens
+a record's attributes into key-value pairs, as it did, but it now writes them
+to one of two places. A declared attribute goes where Elasticsearch maps it,
+`labels.<name>` or an ECS field; every other attribute goes to `log.extra`,
+which the index template maps with `"enabled": false`. Both are shipped and
+both are in `_source`, so nothing is lost from Discover or from an API
+response - the undeclared half simply adds no field to the mapping and cannot
+be filtered or aggregated on. That is the point: a mapped field stays in the
+mapping for ever, and an index has a field limit, a thousand by default, that a
+service inventing attribute names at runtime reaches on its own.
+
+`IndexFields` empty now takes `logger.DefaultIndexFields`, `service` and
+`role`, where it used to mean "index everything". A dashboard that filtered on
+an attribute nobody declared will stop matching until that attribute is listed,
+and the attribute is still visible in the document meanwhile.
+`GraylogConfig.IndexFields` is unchanged and still drops what it does not list.
+
+**`log.elasticsearch.role`** is stamped on every document as `service.role`:
+what this process does, such as `api`, `worker` or `job-runner`, so a service
+deployed as several of them can be told apart. It is process configuration
+rather than a per-record attribute, because a value that can be forgotten at a
+call site will be. `Service`, `Role` and `Host` are all overridden by a record
+attribute of the same name.
+
+`source`, `error`, the stack trace and `trace_id` are always written where ECS
+puts them whether or not they were declared: they describe the event rather
+than a dimension of it, and a stack trace under an unmapped object is a stack
+trace nobody can search for.
+
+The matching `aioz-monitor` index template gains `log.extra`
+(`"enabled": false`) and `service.role`. The two changes only work as a pair:
+without the template, `log.extra` is dynamically mapped like anything else and
+the field count is no more bounded than before.
+
 ### Fixed
 
 **`logger` logs an error as its message, with a stack you can read.** The

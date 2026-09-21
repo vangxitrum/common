@@ -7,11 +7,16 @@ import (
 	"strings"
 )
 
-// errsPkg and errsType name zeebo/errs's error type, which is unexported.
-const (
-	errsPkg  = "github.com/zeebo/errs/v2"
-	errsType = "errorT"
-)
+// errsPkgs and errsType name zeebo/errs's error type, which is unexported.
+// Both major versions are listed: they name the type the same, capture the
+// same stack and print it in the same shape, and a service that has not
+// finished moving to v2 carries errors of both.
+var errsPkgs = []string{
+	"github.com/zeebo/errs/v2",
+	"github.com/zeebo/errs",
+}
+
+const errsType = "errorT"
 
 // Origin returns the innermost error in err's Unwrap chain that zeebo/errs
 // produced, or nil when there is none.
@@ -59,5 +64,13 @@ func isErrs(err error) bool {
 		return false
 	}
 	t = t.Elem()
-	return t.Name() == errsType && t.PkgPath() == errsPkg
+	if t.Name() != errsType {
+		return false
+	}
+	for _, pkg := range errsPkgs {
+		if t.PkgPath() == pkg {
+			return true
+		}
+	}
+	return false
 }

@@ -32,6 +32,14 @@ type Config struct {
 	// deploy time (e.g. "api", "run", "audit").
 	Role string `help:"role label attached to every pushed series" default:""`
 
+	// Env identifies the deployment this process belongs to (label "env"),
+	// e.g. "staging" or "production". Empty omits the label entirely, so a
+	// service that has not been told its environment pushes exactly what it
+	// pushed before. The value should match the AIOZ_ENV the host agent uses
+	// on the same machine, so app series and node_exporter series for one
+	// deployment can be selected together.
+	Env string `help:"env label attached to every pushed series" default:""`
+
 	// Interval is how often the registry is walked and pushed.
 	Interval time.Duration `help:"how often to push metrics to the remote_write receiver" default:"15s"`
 
