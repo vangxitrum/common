@@ -1,16 +1,15 @@
 // Package depin stores and fetches files through a provider-neutral [Storage].
 //
 // The depin go-sdk is the only implementation. It is wrapped rather than used
-// directly for three reasons. Its identifiers are declared in
+// directly for two reasons. Its identifiers are declared in
 // go-sdk/internal/vo, which Go's internal rule puts out of reach of any other
 // module, so every service that used it directly would end up passing raw
-// []byte around. It logs through a *zap.Logger, and this repo logs through
-// log/slog. And it reports every failure as a formatted string, so a caller
-// deciding whether to retry would be matching on error text.
+// []byte around. And it reports every failure as a formatted string, so a
+// caller deciding whether to retry would be matching on error text.
 //
-// So [Storage] speaks in [uuid.UUID], the SDK's logs are bridged into the
-// caller's *slog.Logger, and a failure arrives as an [*Error] whose Code and
-// Temporary say what happened and whether trying again could help.
+// So [Storage] speaks in [uuid.UUID], and a failure arrives as an [*Error]
+// whose Code and Temporary say what happened and whether trying again could
+// help. The SDK logs through the caller's *slog.Logger.
 //
 // Nothing here logs file contents, filenames or user metadata. A filename is
 // often the only description of a private file, and a log line is where it

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpclient"
 )
 
 // ElasticsearchConfig configures the Elasticsearch bulk-ingest sink.
@@ -114,6 +116,23 @@ type elasticsearchSink struct {
 	once sync.Once
 }
 
+// shipTransport is the default transport plus HTTP/2 health checks. The sink
+// posts to the same kind of endpoint the telemetry client does - often the
+// same tunnel - and has the same failure mode: a connection that died without
+// a reset is reused until every flush times out, and the batches in between
+// are dropped rather than queued.
+func shipTransport() *http.Transport {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil
+	}
+
+	transport = transport.Clone()
+	httpclient.ConfigureH2HealthChecks(transport, 0, 0)
+
+	return transport
+}
+
 func newElasticsearchSink(cfg ElasticsearchConfig) *elasticsearchSink {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
@@ -130,7 +149,7 @@ func newElasticsearchSink(cfg ElasticsearchConfig) *elasticsearchSink {
 
 	s := &elasticsearchSink{
 		cfg:     cfg,
-		client:  &http.Client{Timeout: cfg.Timeout},
+		client:  &http.Client{Timeout: cfg.Timeout, Transport: shipTransport()},
 		bulkURL: strings.TrimSuffix(cfg.URL, "/") + "/_bulk",
 		done:    make(chan struct{}),
 	}

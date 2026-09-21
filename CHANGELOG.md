@@ -4,24 +4,28 @@
 
 ### Added
 
-**`logger/zapbridge` joins zap and slog, in both directions.** A service whose
-call sites are zap - because it was written that way, or because a library it
-embeds offers no other hook - can send everything it already logs into this
-module's handler by teeing one `zapcore.Core` onto its root logger, with its
-console output untouched and no call site rewritten. `Handler` is the other
-direction, for handing `lifecycle`, `stats/debug` or `stats/telemetry` a logger
-when the process's own is zap, so their lines take the same format, level and
-sinks as the rest of the process rather than arriving from a second handler.
+**`logger/logtest`: loggers for tests.** `New(t)` writes every record into the
+test's own log, so a failing test prints what the code under test logged and a
+passing one prints nothing. `NewRecorder` keeps every record - message, level
+and attributes flattened to dotted keys, errors kept as errors - so a test can
+assert that a line was written and with what, which is what zap's
+`zaptest/observer` was used for.
 
-The entry's time and caller cross with it, so a buffered handler reports when a
-record happened rather than when it was drained; `zap.Error` crosses as the
-error itself, because the handler takes the error value to derive
-`error.stack_trace` and a message string leaves that field empty. A zap logger
-name arrives as the attribute `logger` - `depin`'s SDK bridge, which this
-package replaces, called it `sdk_logger`.
+**Per-component levels: `logger.Config.ComponentLevels` and
+`logging.Config.CustomLevel`.** A record whose `component` attribute - the key
+`lifecycle` and `stats/debug` already use - names a listed component is written
+only at or above that component's level, so one noisy part of a service can be
+quietened without losing the rest of its debug output. The innermost component
+wins, as with a nested zap `Named`. Configured as `custom-level:
+audit=warn,relay=error`.
 
-The package is separate from `logger` so that zap enters a consumer's module
-graph only when that consumer asks for it.
+**`logging.Config.Output`: stdout, stderr or a file path** for the console
+format, and **`logger.Config.Output` / `logging.WithOutput`** to hand it a
+writer directly.
+
+**`stats/debug.NewServerWithLevelHandler`** serves `/logging` from any
+`http.Handler`, for a process whose level does not live in an `*slog.LevelVar`
+or that wants its own `/logging` protocol.
 
 **`config.FindConfigDirParam`, `FindIdentityDirParam` and `FindDefaultsParam`.**
 The three flags a service reads out of `os.Args` before flag parsing has
@@ -30,6 +34,19 @@ be made while the flags are still being declared. Each is `FindFlagEarly` with
 the name filled in.
 
 ### Changed
+
+**`depin` hands the go-sdk the caller's `*slog.Logger` directly.** The go-sdk
+now logs through `log/slog`, so the zap core that bridged its lines into the
+caller's handler is gone, and this module no longer imports zap anywhere. It
+stays in `go.mod` only as an indirect dependency of libp2p.
+
+**The text console names a source as `pkg/file.go:line`**, not by the absolute
+path of whatever checkout built the binary. JSON output and the sinks keep the
+full path.
+
+**`logging.Config.Validate` rejects an Elasticsearch URL with no scheme.** It
+used to bind, build a sink, and then fail once per flush at the transport, with
+nothing pointing back at the configuration.
 
 **`errs2.Frames` reads a zeebo/errs v1 error too.** It matched the v2 type
 alone, so a service part-way through the move between them - or one embedding a

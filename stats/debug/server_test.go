@@ -186,9 +186,8 @@ func TestPrometheusMetrics_GzipCompression(t *testing.T) {
 	})
 }
 
-// A process whose level lives in another logging library's own atomic level -
-// zap's, reached through logger/zapbridge - serves that library's handler at
-// /logging instead of one over an slog.LevelVar.
+// A process whose level does not live in an slog.LevelVar serves its own
+// handler at /logging.
 func TestNewServerWithLevelHandlerServesTheGivenHandler(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -199,7 +198,7 @@ func TestNewServerWithLevelHandlerServesTheGivenHandler(t *testing.T) {
 		monkit.Default,
 		Config{},
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("from zap"))
+			_, _ = w.Write([]byte("custom"))
 		}),
 	)
 
@@ -220,5 +219,5 @@ func TestNewServerWithLevelHandlerServesTheGivenHandler(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	require.Equal(t, "from zap", string(body))
+	require.Equal(t, "custom", string(body))
 }

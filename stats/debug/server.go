@@ -107,9 +107,8 @@ func NewServerWithLevel(
 }
 
 // NewServerWithLevelHandler is NewServerWithLevel for a process whose level
-// does not live in an *slog.LevelVar - one logging through another library,
-// bridged in, where that library's own level is the one that decides what is
-// written. It serves logging at /logging, or omits the endpoint when nil.
+// does not live in an *slog.LevelVar, or that wants its own /logging
+// protocol. It serves logging at /logging, or omits the endpoint when nil.
 func NewServerWithLevelHandler(
 	log *slog.Logger,
 	listener net.Listener,
@@ -234,7 +233,7 @@ func indexPage(
 		if writeLogging {
 			line("<dt>", htmlLink("/logging"), "</dt>")
 			line(
-				"<dd>JSON endpoint can report or change the current logging level (https://pkg.go.dev/go.uber.org/zap#AtomicLevel.ServeHTTP)</dd>",
+				"<dd>GET reports the current logging level; PUT with a level (DEBUG, INFO, WARN, ERROR) as the body changes it</dd>",
 			)
 		}
 		for _, ext := range extensions {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 )
 
 // bulkRecorder is a fake Elasticsearch: it parses the ndjson bulk body so a
@@ -408,6 +409,19 @@ func TestElasticsearchSink_CloseIsIdempotent(t *testing.T) {
 
 	require.NoError(t, sink.Close())
 	require.NoError(t, sink.Close(), "a second Close must not panic on a closed channel")
+}
+
+func TestElasticsearchSink_UsesAHealthCheckedTransport(t *testing.T) {
+	sink := newElasticsearchSink(ElasticsearchConfig{URL: "http://example.invalid"})
+	defer func() { _ = sink.Close() }()
+
+	transport, ok := sink.client.Transport.(*http.Transport)
+	require.True(t, ok, "the sink should carry its own transport")
+
+	// Same reasoning as the telemetry client: this sink posts to the same kind
+	// of endpoint and would stall the same way on a dead pooled connection.
+	_, err := http2.ConfigureTransports(transport)
+	require.Error(t, err, "http/2 health checks should already be configured")
 }
 
 func TestECSLevel(t *testing.T) {

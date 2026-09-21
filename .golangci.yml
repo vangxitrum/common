@@ -55,13 +55,6 @@ linters:
           list-mode: lax
           files:
             - $all
-            # logger/zapbridge is the one package that joins zap and slog, for
-            # a consumer whose call sites are zap or an SDK whose only logging
-            # hook takes a *zap.Logger - depin's does. It is a package of its
-            # own so zap enters a consumer's module graph only when asked for,
-            # and it is the only place in this repo allowed to name zap.
-            - "!**/zapbridge/*.go"
-            - "!**/depin/slogzap*.go"
           allow:
             - "log/slog"
           deny:

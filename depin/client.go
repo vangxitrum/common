@@ -60,14 +60,10 @@ func NewClient(log *slog.Logger, config ClientConfig) (*Client, error) {
 		)
 	}
 
-	// Built in slogzap.go, so zap is named in exactly one file. See
-	// newSDKLogger for why the level is what it is.
-	sdkLogger := newSDKLogger(log)
-
 	opts := []uplinksdk.ClientOption{
 		uplinksdk.WithIdentityDir(config.IdentityDir),
 		uplinksdk.WithCoordPeerURL(config.CoordPeerURL),
-		uplinksdk.WithLogger(sdkLogger),
+		uplinksdk.WithLogger(log),
 	}
 	// Every tuning option is appended only when set, so the SDK's own default
 	// stays the default and this package never has to restate it.
