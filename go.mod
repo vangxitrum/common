@@ -31,7 +31,7 @@ require (
 	github.com/zeebo/errs v1.4.0
 	github.com/zeebo/errs/v2 v2.0.5
 	github.com/zeebo/structs v1.0.3-0.20230601144555-f2db46069602
-	gitlab.internal/aioz-depin/go-sdk v0.0.0-20260921091215-1bd734670d17
+	gitlab.internal/aioz-depin/go-sdk v0.0.0-20260921104014-ef2115da4a3b
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/text v0.42.0

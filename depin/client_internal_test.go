@@ -3,12 +3,15 @@ package depin
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/retry"
 )
 
 // classify is what decides whether a caller may try again, so every gRPC code
@@ -130,4 +133,57 @@ func TestUploadParamsValidate(t *testing.T) {
 
 	require.ErrorAs(t, UploadParams{Size: 1}.validate(), &e)
 	require.Equal(t, CodeInvalid, e.Code)
+}
+
+// The coordinator answers NotFound for an identity it has no record of, which
+// is an identity that was never registered. Every caller has to treat that as
+// an auth failure, so the code says auth and a NotFound on any other call is
+// left alone.
+func TestAccountNotFoundIsAuth(t *testing.T) {
+	t.Parallel()
+
+	e := (&Client{}).classify("account", status.Error(codes.NotFound, "gone"))
+	accountNotFoundIsAuth(e)
+	require.Equal(t, CodeAuth, e.Code)
+	require.False(t, e.Temporary, "an unregistered identity stays unregistered")
+	require.Equal(t, codes.NotFound.String(), e.GRPC,
+		"the status it came from is still in the log line")
+
+	other := (&Client{}).classify(
+		"account",
+		status.Error(codes.PermissionDenied, "nope"),
+	)
+	accountNotFoundIsAuth(other)
+	require.Equal(t, CodePermission, other.Code)
+}
+
+// doMapped's remap runs before the retry decision, so a corrected permanent
+// failure costs one round trip rather than the whole budget.
+func TestDoMappedRemapsBeforeDecidingToRetry(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{
+		log: slog.New(slog.DiscardHandler),
+		backoff: retry.New(retry.Config{
+			Name: "depin-test", MaxAttempts: 4,
+			InitialDelay: time.Millisecond, MaxDelay: time.Millisecond,
+			Multiplier: 2,
+		}),
+	}
+
+	attempts := 0
+	err := client.doMapped(
+		context.Background(),
+		"account",
+		accountNotFoundIsAuth,
+		func() error {
+			attempts++
+			return status.Error(codes.NotFound, "no such client")
+		},
+	)
+
+	var got *Error
+	require.ErrorAs(t, err, &got)
+	require.Equal(t, CodeAuth, got.Code)
+	require.Equal(t, 1, attempts)
 }

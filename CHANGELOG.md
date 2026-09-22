@@ -4,6 +4,44 @@
 
 ### Added
 
+**`depin.Storage` gains `DownloadRange`, `CreateLocalTicket` and `Account`.**
+`DownloadRange(ctx, fileID, w, offset, length)` writes the plaintext bytes
+`[offset, offset+length)`, so a caller that packs thumbnail sizes, HLS
+segments, captions and chapters into one uploaded file reads one back without
+fetching the whole pack. A negative offset or a length of zero or less is
+`invalid` here rather than an `OutOfRange` a round trip later; a whole file
+stays `Download`'s job.
+
+`CreateLocalTicket(fileID, expiresAt)` signs a ticket with the identity's own
+CA key and makes no coordinator call, which is what a playlist minting one link
+per segment needs - an RPC per link is what pushed playlist loading past client
+timeouts. It takes no context because nothing about it blocks. An identity
+directory with no `ca.cert`/`ca.key` pair reports `auth`, a distinct code so
+the fallback to `CreateTicket` is a check on `Code` and not a match on a
+message. `Ticket.ExpiresAt` comes back truncated to the second, because the
+token carries whole Unix seconds and that is what the coordinator enforces.
+
+`Account(ctx)` returns this package's own `Account` - `ID`, `Address` (the
+deposit address, EVM-style hex), `Email`, `Status`, `CreatedAt` - rather than
+the SDK's protobuf record, whose id and address types are declared in
+`go-sdk/internal/vo` and so cannot be named outside that module. It is a short
+idempotent RPC, so it retries with the other coordinator calls. The
+coordinator's `NotFound` for an identity it has no record of means an identity
+that was never registered, which every caller has to treat as an auth failure,
+so this one call reports it as `auth`.
+
+`depintest.Recorder` serves ranges from `Files`, clipped to the recorded bytes,
+and records them in `Ranges()`; local tickets are recorded apart from
+coordinator ones in `LocallyTicketed()`, and `AccountRecord` is what `Account`
+returns. The `log` provider reports a range as `not_found` like its `Download`,
+mints the same stand-in token for a local ticket as for a coordinator one, and
+answers `Account` with a stand-in whose address is the zero address, so a
+service that reads its deposit address at startup still boots with no identity
+and no coordinator.
+
+**The go-sdk pin moves to `ef2115da4a3b`**, which is where
+`DownloadFileRange`, `CreateDownloadTicketLocal` and `GetAccount` live.
+
 **`postgres.Config.LogQueries` and `SlowQuery`: a query log.** `db.log-queries`
 logs every statement at debug; `db.slow-query` logs anything at or over a
 duration at warn. A failure is an error whatever the threshold says, and a slow
@@ -57,6 +95,10 @@ flattened into the message string. The `*Error` is still what a caller matches
 with `errors.As`.
 
 ### Changed
+
+**`depin.Storage` is three methods wider.** Anything outside this repo
+implementing it needs `DownloadRange`, `CreateLocalTicket` and `Account`;
+`depintest.Recorder` and the `log` provider already have them.
 
 **`Critical` attaches its stack as `callstack`, not `stacktrace`,** and
 `logger.Stack()` returns the same trimmed `function:line` shape as every other

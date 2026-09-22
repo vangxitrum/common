@@ -205,6 +205,40 @@ func (c *Client) Download(
 	return nil
 }
 
+// DownloadRange writes the plaintext bytes [offset, offset+length) to w. Like
+// Download it is not retried here: the SDK re-resolves the manifest and
+// retries its own pieces.
+func (c *Client) DownloadRange(
+	ctx context.Context,
+	fileID uuid.UUID,
+	w io.Writer,
+	offset, length int64,
+) (err error) {
+	defer mon.Task()(&ctx)(&err)
+
+	if fileID.IsNil() {
+		return invalid("download range", "no file id")
+	}
+	if w == nil {
+		return invalid("download range", "writer is nil")
+	}
+	// A negative offset and a non-positive length are both caught here rather
+	// than sent: the coordinator would answer OutOfRange after a round trip,
+	// and "the rest of the file" is Download's job, not a zero length's.
+	if offset < 0 {
+		return invalid("download range", "offset is negative")
+	}
+	if length <= 0 {
+		return invalid("download range", "length must be greater than zero")
+	}
+
+	err = c.sdk.DownloadFileRange(ctx, fileID.Bytes(), w, offset, length)
+	if err != nil {
+		return c.classify("download range", err)
+	}
+	return nil
+}
+
 // DownloadByTicket writes the ticket's file to w, without this client's
 // identity being the one that authorized it.
 func (c *Client) DownloadByTicket(
@@ -255,6 +289,105 @@ func (c *Client) CreateTicket(
 		return Ticket{}, err
 	}
 	return ticket, nil
+}
+
+// CreateLocalTicket signs a ticket with the identity's CA key, without a
+// coordinator round trip, so a caller minting one link per playlist segment
+// pays no RPC per link.
+//
+// Every failure the signing itself can report is about the identity's CA key
+// pair - absent from the identity directory, or unusable - so all of them are
+// [CodeAuth], and a caller falls back to [Client.CreateTicket] on that code
+// rather than on a message.
+func (c *Client) CreateLocalTicket(
+	fileID uuid.UUID,
+	expiresAt time.Time,
+) (_ Ticket, err error) {
+	defer mon.Task()(nil)(&err)
+
+	if fileID.IsNil() {
+		return Ticket{}, invalid("create local ticket", "no file id")
+	}
+
+	token, err := c.sdk.CreateDownloadTicketLocal(fileID.Bytes(), expiresAt)
+	if err != nil {
+		return Ticket{}, failed(&Error{
+			Code: CodeAuth, Op: "create local ticket",
+			detail: "the identity CA key pair cannot sign a ticket",
+			cause:  err,
+		})
+	}
+
+	// The token carries the expiry as whole Unix seconds, so the sub-second
+	// part of expiresAt is not what the coordinator will enforce.
+	return Ticket{Token: token, ExpiresAt: expiresAt.Truncate(time.Second)}, nil
+}
+
+// Account returns the coordinator's record of this client's identity. It is a
+// short idempotent RPC, so it is retried.
+func (c *Client) Account(ctx context.Context) (_ Account, err error) {
+	defer mon.Task()(&ctx)(&err)
+
+	// The record is unpacked into these rather than kept, so the SDK's
+	// protobuf message does not outlive the call and no type from
+	// go-sdk/internal/vo is ever named: record.Id and record.Address are read
+	// through the []byte they are and the String method they carry.
+	var (
+		idBytes  []byte
+		found    bool
+		unpacked Account
+	)
+	err = c.doMapped(ctx, "account", accountNotFoundIsAuth, func() error {
+		record, err := c.sdk.GetAccount(ctx)
+		if err != nil {
+			return err
+		}
+		if record == nil {
+			return nil
+		}
+		found = true
+		idBytes = record.Id
+		unpacked = Account{
+			Address:   record.Address.String(),
+			Email:     record.GetEmail(),
+			Status:    record.GetStatus(),
+			CreatedAt: record.GetCreatedAt(),
+		}
+		return nil
+	})
+	if err != nil {
+		return Account{}, err
+	}
+	if !found {
+		return Account{}, failed(&Error{
+			Code: CodeUnavailable, Op: "account", Temporary: true,
+			detail: "the coordinator returned no account record",
+		})
+	}
+
+	// An id that is not 16 bytes is reported rather than truncated, as
+	// everywhere else here.
+	id, err := uuid.FromBytes(idBytes)
+	if err != nil {
+		return Account{}, &Error{
+			Code: CodeUnavailable, Op: "account",
+			detail: "the coordinator returned an unreadable account id",
+			cause:  err,
+		}
+	}
+	unpacked.ID = id
+	return unpacked, nil
+}
+
+// accountNotFoundIsAuth corrects the one status whose usual meaning does not
+// hold for this call: the coordinator answers NotFound when it has no record
+// of the identity, which is an identity that was never registered - the
+// failure a redeployed coordinator produces - and not a missing object the
+// caller asked for by id. Callers treat it as auth, so the code says auth.
+func accountNotFoundIsAuth(e *Error) {
+	if e.Code == CodeNotFound {
+		e.Code = CodeAuth
+	}
 }
 
 // DeleteFile removes one file.
@@ -347,6 +480,18 @@ func (c *Client) Close() error {
 // Only the calls that are idempotent and cheap go through here. The retry
 // stops at the first permanent failure, so a NotFound costs one round trip.
 func (c *Client) do(ctx context.Context, op string, call func() error) error {
+	return c.doMapped(ctx, op, nil, call)
+}
+
+// doMapped is do with a chance to correct the classification before it decides
+// whether to retry and before the failure is counted, for a call whose gRPC
+// status means something other than what it usually does.
+func (c *Client) doMapped(
+	ctx context.Context,
+	op string,
+	remap func(*Error),
+	call func() error,
+) error {
 	loop := c.backoff.Loop()
 	var last *Error
 
@@ -360,6 +505,9 @@ func (c *Client) do(ctx context.Context, op string, call func() error) error {
 		}
 
 		last = c.classify(op, err)
+		if remap != nil {
+			remap(last)
+		}
 		if !last.Temporary {
 			return failed(last)
 		}

@@ -62,15 +62,17 @@ looks like a working system.
 
 ## Only the short coordinator calls are retried
 
-`CreateTicket`, `DeleteFile`, `ListPlacements` and `CreateContract` are
-idempotent and cheap, so they retry with the [`retry`](../retry/README.md)
+`CreateTicket`, `Account`, `DeleteFile`, `ListPlacements` and `CreateContract`
+are idempotent and cheap, so they retry with the [`retry`](../retry/README.md)
 package's backoff and stop at the first permanent failure. A `not_found` costs
 one round trip, not four.
 
 `Upload` is not retried: its bytes are consumed as they are sent, and this
-package cannot rewind an arbitrary `io.Reader`. `Download` is not retried
-either, because the SDK already retries its own pieces and re-resolves the
-manifest. A download error here means it has already given up.
+package cannot rewind an arbitrary `io.Reader`. `Download` and `DownloadRange`
+are not retried either, because the SDK already retries its own pieces and
+re-resolves the manifest. A download error here means it has already given up.
+
+`CreateLocalTicket` makes no call at all, so there is nothing to retry.
 
 ## A failure says whether trying again could help
 
@@ -98,13 +100,59 @@ Not a filename, not user metadata, not file contents. A filename is often the
 only description a private file has, and a log line is where it would leak.
 Sizes, ids and placement names are logged; the tests assert the rest is not.
 
+## A packed file is read by byte range
+
+`DownloadRange` writes the plaintext bytes `[offset, offset+length)`. A caller
+that packs several small objects into one uploaded file - thumbnail sizes, HLS
+segments, captions, chapters - reads them back this way, and `Download` would
+fetch the whole pack for each one.
+
+A negative offset and a length of zero or less are refused as `invalid` here,
+before the round trip that would answer `OutOfRange`. A whole file is
+`Download`'s job: a zero length does not mean "the rest".
+
+## A ticket can be signed without the coordinator
+
+`CreateTicket` asks the coordinator. `CreateLocalTicket` signs the ticket with
+the identity's own CA key and takes no context, because nothing about it
+blocks. A playlist with hundreds of segments mints one link per segment, and
+one RPC per link is what pushes the playlist past a client's timeout.
+
+An identity directory with no `ca.cert`/`ca.key` pair cannot sign, and that is
+reported as `auth`. It is a distinct code so the fallback to `CreateTicket` is
+a check on `Code`, not a match on a message:
+
+```go
+ticket, err := storage.CreateLocalTicket(fileID, expiresAt)
+var storageErr *depin.Error
+if errors.As(err, &storageErr) && storageErr.Code == depin.CodeAuth {
+    ticket, err = storage.CreateTicket(ctx, fileID, expiresAt)
+}
+```
+
+The token carries the expiry as whole Unix seconds, so `Ticket.ExpiresAt` is
+`expiresAt` truncated to the second: what the coordinator will enforce, not
+what was asked for.
+
+## The account is this package's struct, not the SDK's message
+
+`Account` returns `ID`, `Address` (the deposit address, an EVM-style hex
+string), `Email`, `Status` and `CreatedAt`. The SDK's own record is a protobuf
+message whose id and address fields are declared in `go-sdk/internal/vo`, so a
+caller holding it would be holding types it cannot name.
+
+The coordinator answers `NotFound` when it has no record of the identity, which
+means the identity was never registered - what a redeployed coordinator
+produces. That is an auth failure for every caller, so this one call reports it
+as `auth` rather than `not_found`.
+
 ## What this package does not do
 
 - It does not expose the SDK's protobuf types. `ListPlacements` returns this
   package's `Placement`, not `*placementpb.Placement`.
-- It does not wrap account registration, usage reporting, byte-range downloads,
-  ticket resolution or contract deletion. They are reachable on the SDK and can
-  be added here when a service needs them.
+- It does not wrap account registration, usage reporting, ticket resolution or
+  contract deletion. They are reachable on the SDK and can be added here when a
+  service needs them.
 - It does not return a reader. Downloads write to an `io.Writer` as the data
   arrives, because that is the shape the SDK offers; bridge it with `io.Pipe`.
 - It does not retry uploads or downloads. See above.
@@ -117,8 +165,11 @@ Sizes, ids and placement names are logged; the tests assert the rest is not.
 type Storage interface {
     Upload(ctx context.Context, r io.Reader, p UploadParams) (Receipt, error)
     Download(ctx context.Context, fileID uuid.UUID, w io.Writer) error
+    DownloadRange(ctx context.Context, fileID uuid.UUID, w io.Writer, offset, length int64) error
     DownloadByTicket(ctx context.Context, ticket string, w io.Writer) error
     CreateTicket(ctx context.Context, fileID uuid.UUID, expiresAt time.Time) (Ticket, error)
+    CreateLocalTicket(fileID uuid.UUID, expiresAt time.Time) (Ticket, error)
+    Account(ctx context.Context) (Account, error)
     DeleteFile(ctx context.Context, fileID uuid.UUID) error
     ListPlacements(ctx context.Context) ([]Placement, error)
     CreateContract(ctx context.Context, region string, placementID int32, tags map[string]string) (uuid.UUID, error)
@@ -161,6 +212,14 @@ type Placement struct {
     Description string
 }
 
+type Account struct {
+    ID        uuid.UUID
+    Address   string
+    Email     string
+    Status    string
+    CreatedAt time.Time
+}
+
 type Error struct {
     Code      string
     Op        string
@@ -173,7 +232,9 @@ func (e *Error) Error() string
 
 `depin/depintest` holds `Recorder`, a recording `Storage` for tests, with a
 `Fail` hook for making one operation fail and a `Files` map for serving
-downloads.
+downloads. `Files` serves ranges too, clipped to the recorded bytes, and
+`Ranges`, `Ticketed`, `LocallyTicketed`, `Uploads`, `Deleted` and `Contracts`
+are what a test asserts on. `AccountRecord` is what `Account` returns.
 
 ## Tests
 
