@@ -429,6 +429,48 @@ slog.Error("chore pass failed; retrying next interval", "err", err)
   (`10.0.0.50/tuan.quang.tran/vms-v2/...` becomes `vms-v2/...`), and the
   runtime, errgroup and lifecycle frames that start every goroutine are left
   out.
+
+### The call stack of the log statement
+
+`stacktrace` says where a failure **began**. It comes from the error, so it
+only exists when something in the chain is a zeebo/errs error - a
+`depin`/`slack`/`s3client`/`mail` `*Error` carries no stack of its own.
+
+`callstack` is the other question: how the goroutine **reached** the log
+statement. Set `StacktraceLevel` and every record at or above it carries one,
+the way zap's `AddStacktrace` does:
+
+```go
+logger.Config{StacktraceLevel: slog.LevelError}
+```
+
+```
+log:
+  level: error
+  stacktrace-level: error   # blank disables it, which is the default
+```
+
+```
+[2026-09-22 11:40:02.118] ERR could not fetch the file src=app/handler.go:88 err=depin: download: not_found
+  callstack:
+    vms-v2/internal/api.(*Handler).GetMedia:88
+    vms-v2/internal/api.(*Handler).route:41
+    vms-v2/internal/server.(*Server).ServeHTTP:120
+```
+
+- The two never displace each other. A record can carry both, and each keeps
+  its own block on the console and its own field elsewhere.
+- Elasticsearch files `stacktrace` under ECS `error.stack_trace` and
+  `callstack` under `log.origin.stack_trace`, beside `log.origin.file.name`
+  from `AddSource`. A call stack is a property of the log event, not of any
+  error, and a `Critical` with no error would otherwise invent one.
+- A record that already carries a `callstack` keeps it, so
+  [`Critical`](#critical) - which captures at the call site - wins over the
+  automatic capture, and `logger.Stack()` lets you attach one by hand at any
+  level.
+- The capture is a `runtime.Callers` walk per qualifying record, on the
+  caller's goroutine. A threshold below `warn` on a busy service is worth
+  measuring first. It is off unless configured.
 - The stack is found through `fmt.Errorf("%w")` and through an `apierr`,
   whose cause's stack is taken before it resolves to its message. See
   [`errs2.Frames`](../errs2/README.md).

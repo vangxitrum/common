@@ -26,7 +26,7 @@ func classify(op string, err error) *Error {
 		return already
 	}
 
-	out := &Error{Op: op, detail: err.Error()}
+	out := &Error{Op: op, detail: err.Error(), cause: err}
 
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {

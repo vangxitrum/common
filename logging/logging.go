@@ -29,6 +29,8 @@ type Config struct {
 	Output      string `help:"where the console format is written: stdout, stderr, or a file path" default:""`
 	CustomLevel string `help:"per-component minimum levels as COMPONENT=LEVEL pairs, e.g. audit=warn,relay=error; a component is the \"component\" attribute" default:""`
 
+	StacktraceLevel string `help:"attach the call stack of the log statement, as \"callstack\", to every record at or above this level (debug, info, warn, error, critical); blank disables it" default:""`
+
 	File          FileConfig
 	Graylog       GraylogConfig
 	Elasticsearch ElasticsearchConfig
@@ -141,6 +143,20 @@ func ParseFormat(name string) (logger.Format, error) {
 		name, strings.Join(Formats(), ", "))
 }
 
+// ParseStacktraceLevel parses Config.StacktraceLevel: a level name, or blank
+// for no automatic call stack at all. It returns nil when disabled, which is
+// what logger.Config.StacktraceLevel takes.
+func ParseStacktraceLevel(name string) (slog.Leveler, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, nil
+	}
+	level, err := ParseLevel(name)
+	if err != nil {
+		return nil, Error.Errorf("stacktrace level: %v", err)
+	}
+	return level, nil
+}
+
 // ParseCustomLevel parses COMPONENT=LEVEL pairs separated by commas.
 func ParseCustomLevel(spec string) (map[string]slog.Level, error) {
 	spec = strings.TrimSpace(spec)
@@ -194,6 +210,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, err := ParseCustomLevel(c.CustomLevel); err != nil {
+		return err
+	}
+	if _, err := ParseStacktraceLevel(c.StacktraceLevel); err != nil {
 		return err
 	}
 	if c.Elasticsearch.Enabled {
@@ -274,6 +293,10 @@ func New(cfg Config, opts ...Option) (*logger.Handler, *slog.LevelVar, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	stacktraceLevel, err := ParseStacktraceLevel(cfg.StacktraceLevel)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Level is the LevelVar itself, not its current value, so /logging takes
 	// effect on the running handler.
@@ -285,6 +308,7 @@ func New(cfg Config, opts ...Option) (*logger.Handler, *slog.LevelVar, error) {
 		ReplaceAttr:     RedactAttr(cfg.Redact...),
 		Output:          output,
 		ComponentLevels: componentLevels,
+		StacktraceLevel: stacktraceLevel,
 	}
 
 	if cfg.File.Enabled {

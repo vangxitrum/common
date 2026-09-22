@@ -178,6 +178,7 @@ func (c *Client) Upload(
 		return Receipt{}, &Error{
 			Code: CodeUnavailable, Op: "upload",
 			detail: "the coordinator returned an unreadable file id",
+			cause:  err,
 		}
 	}
 	return Receipt{FileID: id, EncryptedSize: encryptedSize}, nil
@@ -393,7 +394,7 @@ func (c *Client) classify(op string, err error) *Error {
 		errors.Is(err, context.DeadlineExceeded) {
 		return &Error{
 			Code: CodeTransport, Op: op, Temporary: true,
-			detail: err.Error(),
+			detail: err.Error(), cause: err,
 		}
 	}
 
@@ -403,11 +404,13 @@ func (c *Client) classify(op string, err error) *Error {
 		// response. Worth another try.
 		return &Error{
 			Code: CodeTransport, Op: op, Temporary: true,
-			detail: err.Error(),
+			detail: err.Error(), cause: err,
 		}
 	}
 
-	out := &Error{Op: op, GRPC: st.Code().String(), detail: st.Message()}
+	out := &Error{
+		Op: op, GRPC: st.Code().String(), detail: st.Message(), cause: err,
+	}
 	switch st.Code() {
 	case codes.OK:
 		// An error carrying OK is the SDK failing on its own side, after a

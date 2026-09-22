@@ -38,7 +38,8 @@ func (s *logStorage) Upload(
 	written, err := io.Copy(io.Discard, r)
 	if err != nil {
 		return Receipt{}, &Error{
-			Code: CodeTransport, Op: "upload", detail: err.Error(),
+			Code: CodeTransport, Op: "upload",
+			detail: err.Error(), cause: err,
 		}
 	}
 

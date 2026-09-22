@@ -317,14 +317,20 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 		switch k {
 		case "source":
 			if src, ok := v.(string); ok {
-				// log.level is already there; add origin beside it.
-				doc["log"].(map[string]any)["origin"] = map[string]any{
-					"file": map[string]any{"name": src},
-				}
+				// Merged, not assigned: attrs is a map, so "callstack" may
+				// have been handled first and already put log.origin there.
+				logOrigin(doc)["file"] = map[string]any{"name": src}
 				continue
 			}
 		case stackKey:
 			setError(doc, "stack_trace", stripANSI(fmt.Sprint(v)))
+			continue
+		case callstackKey:
+			// Not error.stack_trace: this is where the process was when it
+			// logged, which is a property of the log event and not of any
+			// error. It sits beside log.origin.file.name, which says the same
+			// thing one frame deep.
+			logOrigin(doc)["stack_trace"] = stripANSI(fmt.Sprint(v))
 			continue
 		case "error":
 			// ECS keeps the message next to the stack trace. Leaving it in
@@ -440,6 +446,23 @@ func isHTTPMethod(s string) bool {
 
 // setError merges one field into the document's error object, which both the
 // stack trace and the message write to.
+// logOrigin returns doc's log.origin object, creating it if this is the first
+// field to land there. Both "source" and "callstack" write into it, and map
+// iteration decides which arrives first.
+func logOrigin(doc map[string]any) map[string]any {
+	log, _ := doc["log"].(map[string]any)
+	if log == nil {
+		log = map[string]any{}
+		doc["log"] = log
+	}
+	origin, _ := log["origin"].(map[string]any)
+	if origin == nil {
+		origin = map[string]any{}
+		log["origin"] = origin
+	}
+	return origin
+}
+
 func setError(doc map[string]any, key string, value any) {
 	errObj, _ := doc["error"].(map[string]any)
 	if errObj == nil {

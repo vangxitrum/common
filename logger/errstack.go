@@ -36,12 +36,18 @@ func ErrorStack(err error) []string {
 // FormatStack renders frames as the block the console prints under a line:
 // "\n  stack:" and then each frame on its own indented line. It returns ""
 // for no frames.
-func FormatStack(frames []string) string {
+func FormatStack(frames []string) string { return formatBlock("stack", frames) }
+
+// formatBlock is FormatStack under a chosen label, so the error's stack and
+// the log statement's call stack print the same shape.
+func formatBlock(label string, frames []string) string {
 	if len(frames) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("\n  stack:")
+	sb.WriteString("\n  ")
+	sb.WriteString(label)
+	sb.WriteString(":")
 	for _, frame := range frames {
 		sb.WriteString("\n    ")
 		sb.WriteString(frame)

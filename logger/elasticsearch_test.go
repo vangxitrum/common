@@ -441,3 +441,58 @@ func TestElasticsearchSink_URLNeedsNoTrailingSlashCare(t *testing.T) {
 	require.Equal(t, "http://es:9200/_bulk", sink.bulkURL)
 	require.NoError(t, sink.Close())
 }
+
+func TestElasticsearchSink_CallstackIsNotAnErrorStackTrace(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(
+		slog.LevelError, time.Now(), "it broke",
+		map[string]any{
+			"source":     "/app/main.go:42",
+			stackKey:     "app/store.Fetch:88",
+			callstackKey: "app/api.(*H).Get:12\napp/router.Serve:40",
+		},
+	))
+
+	_, _, docs := recv.snapshot()
+	require.Len(t, docs, 1)
+	doc := docs[0]
+
+	origin := doc["log"].(map[string]any)["origin"].(map[string]any)
+	require.Equal(t, "/app/main.go:42", origin["file"].(map[string]any)["name"],
+		"the call site keeps its place")
+	require.Contains(t, origin["stack_trace"], "app/api.(*H).Get:12",
+		"and the call stack sits beside it, under log.origin")
+
+	require.Equal(t, "app/store.Fetch:88",
+		doc["error"].(map[string]any)["stack_trace"],
+		"error.stack_trace stays the error's own")
+
+	extra, _ := doc["log"].(map[string]any)["extra"].(map[string]any)
+	require.NotContains(t, extra, callstackKey,
+		"it has an ECS home, so it is not duplicated into log.extra")
+}
+
+func TestElasticsearchSink_CallstackWithNoSource(t *testing.T) {
+	// log.origin may not exist yet when AddSource is off.
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(
+		slog.LevelError, time.Now(), "it broke",
+		map[string]any{callstackKey: "app/api.(*H).Get:12"},
+	))
+
+	_, _, docs := recv.snapshot()
+	require.Len(t, docs, 1)
+	origin := docs[0]["log"].(map[string]any)["origin"].(map[string]any)
+	require.Equal(t, "app/api.(*H).Get:12", origin["stack_trace"])
+	require.NotContains(t, origin, "file")
+}

@@ -4,6 +4,56 @@
 
 ### Added
 
+**`logger.Config.StacktraceLevel` / `log.stacktrace-level`: the call stack of
+the log statement.** Every record at or above the configured level carries
+`callstack` - how the goroutine reached the log statement - the way zap's
+`AddStacktrace` does. Blank, the default, disables it and costs nothing.
+
+This is not `stacktrace`. That one says where a failure *began*, comes from the
+error, and only exists when something in its chain is a zeebo/errs error;
+`callstack` says how the process got to the line that reported it, and exists
+for any record. The two answer different questions, so neither displaces the
+other: both can appear on one record, each with its own console block, and
+Elasticsearch files `stacktrace` under ECS `error.stack_trace` and `callstack`
+under `log.origin.stack_trace`, beside the `log.origin.file.name` that
+`AddSource` produces. A record that already carries a `callstack` keeps it.
+
+The capture happens in the outermost handler, the last point still running on
+the caller's goroutine - `asyncHandler` hands the record to a consumer whose
+stack is its own loop. It is anchored on the record's own program counter, so
+slog's dispatch and this package's handlers are dropped without encoding how
+deep either is.
+
+**`errors.Unwrap` on `depin`, `slack`, `s3client` and `mail` errors.** Each
+`*Error` gains an `Unwrap`, so `errors.Is` reaches a `context.Canceled`, an
+`io` error or the SDK's typed error through a failure, instead of finding it
+flattened into the message string. The `*Error` is still what a caller matches
+with `errors.As`.
+
+### Changed
+
+**`Critical` attaches its stack as `callstack`, not `stacktrace`,** and
+`logger.Stack()` returns the same trimmed `function:line` shape as every other
+stack this package prints instead of its own `function\n\tfile:line` one.
+Before, a `Critical` about an error overwrote that error's `stacktrace` with
+its own call stack, so the failure's origin was lost exactly where it was most
+wanted, and a `Critical` with no error filed a call stack as
+`error.stack_trace`. **Anything querying `error.stack_trace` for Critical lines
+should move to `log.origin.stack_trace`.**
+
+### Fixed
+
+**The call site reaches the sinks, so `log.origin.file.name` is no longer
+always absent.** With `AddSource`, the console handler computed the caller's
+`file:line` and passed it to the console writer alone; the attribute map handed
+to the file, Graylog and Elasticsearch sinks never got it, so the
+Elasticsearch sink's `case "source":` branch was dead in production and
+`logger/README.md`'s promise of `log.origin.file.name` was not kept. A record
+that logs its own `source` - the source of a payment, a feed - keeps it.
+
+
+### Added
+
 **`logger/logtest`: loggers for tests.** `New(t)` writes every record into the
 test's own log, so a failing test prints what the code under test logged and a
 passing one prints nothing. `NewRecorder` keeps every record - message, level

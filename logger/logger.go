@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 // Format controls how log records are serialized.
@@ -23,6 +24,22 @@ type Config struct {
 	Format Format
 	// AddSource includes caller file:line in every record.
 	AddSource bool
+
+	// StacktraceLevel, if set, attaches the goroutine's call stack - how the
+	// code reached the log statement - to every record at or above this
+	// level, as the "callstack" attribute. Nil disables it, which is the
+	// default. slog.LevelError is the usual choice.
+	//
+	// This is not the error's own stack. That one says where a failure began,
+	// is taken from the error by [ErrorStack], and goes in "stacktrace". Both
+	// can appear on one record and neither replaces the other. A record that
+	// already carries a "callstack" keeps it, so [Critical]'s own capture -
+	// taken at the call site rather than here - wins.
+	//
+	// The capture costs a runtime.Callers walk per record at or above the
+	// level, on the caller's goroutine, so a threshold below Warn on a busy
+	// service is worth measuring first.
+	StacktraceLevel slog.Leveler
 
 	// ReplaceAttr, if set, rewrites or drops each attribute before it is
 	// written anywhere: stdout, file, Graylog or Elasticsearch. It sees attributes from every
@@ -89,6 +106,12 @@ type Handler struct {
 	levels    map[string]slog.Level
 	threshold *slog.Level
 	inGroup   bool
+
+	// stackLevel is Config.StacktraceLevel. The capture happens here, in the
+	// outermost handler, because it is the last point still running on the
+	// caller's goroutine: asyncHandler hands the record to a consumer, whose
+	// stack is its own loop and says nothing about who logged.
+	stackLevel slog.Leveler
 }
 
 // New constructs a Handler from cfg. Always call Shutdown before process exit.
@@ -132,10 +155,11 @@ func New(cfg Config) (*Handler, error) {
 	async := newAsyncHandler(h, cfg.AsyncBufferSize)
 
 	return &Handler{
-		inner:  async,
-		async:  async,
-		sinks:  sinks,
-		levels: cfg.ComponentLevels,
+		inner:      async,
+		async:      async,
+		sinks:      sinks,
+		levels:     cfg.ComponentLevels,
+		stackLevel: cfg.StacktraceLevel,
 	}, nil
 }
 
@@ -164,6 +188,18 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 			}
 		}
 	}
+
+	// Still on the caller's goroutine here; see Handler.stackLevel.
+	if h.stackLevel != nil && r.Level >= h.stackLevel.Level() &&
+		!hasAttr(r, callstackKey) {
+		if frames := captureCallstack(r.PC); len(frames) > 0 {
+			// Clone first: the record was handed to us and its attributes may
+			// share a backing array with the caller's.
+			r = r.Clone()
+			r.AddAttrs(slog.String(callstackKey, strings.Join(frames, "\n")))
+		}
+	}
+
 	return h.inner.Handle(ctx, r)
 }
 

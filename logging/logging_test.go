@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"gitlab.internal/tuan.quang.tran/aioz-common/logger"
 	"gitlab.internal/tuan.quang.tran/aioz-common/logging"
 )
 
@@ -193,4 +195,82 @@ func TestOutputWritesToAFile(t *testing.T) {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(data), "to a file")
+}
+
+func TestParseStacktraceLevel(t *testing.T) {
+	t.Parallel()
+
+	off, err := logging.ParseStacktraceLevel("")
+	require.NoError(t, err)
+	require.Nil(t, off, "blank disables the automatic call stack")
+
+	off, err = logging.ParseStacktraceLevel("   ")
+	require.NoError(t, err)
+	require.Nil(t, off)
+
+	level, err := logging.ParseStacktraceLevel("error")
+	require.NoError(t, err)
+	require.Equal(t, slog.LevelError, level.Level())
+
+	level, err = logging.ParseStacktraceLevel("critical")
+	require.NoError(t, err)
+	require.Equal(t, logger.LevelCritical, level.Level())
+
+	_, err = logging.ParseStacktraceLevel("loud")
+	require.Error(t, err, "an unknown level is a configuration error")
+}
+
+func TestValidateRejectsABadStacktraceLevel(t *testing.T) {
+	t.Parallel()
+
+	cfg := logging.Config{Level: "info", Format: "text", StacktraceLevel: "loud"}
+	require.Error(t, cfg.Validate())
+
+	cfg.StacktraceLevel = "error"
+	require.NoError(t, cfg.Validate())
+
+	cfg.StacktraceLevel = ""
+	require.NoError(t, cfg.Validate(), "blank is valid: the feature is off")
+}
+
+func TestNewAttachesTheCallStackAtTheConfiguredLevel(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	handler, _, err := logging.New(logging.Config{
+		Level:           "debug",
+		Format:          "json",
+		StacktraceLevel: "warn",
+		AsyncBufferSize: 64,
+	}, logging.WithOutput(&buf))
+	require.NoError(t, err)
+
+	log := slog.New(handler)
+	log.Info("quiet")
+	log.Warn("loud")
+	require.NoError(t, shutdown(handler))
+
+	out := buf.String()
+	require.NotEmpty(t, out)
+	require.Contains(t, out, "callstack",
+		"a record at the configured level carries one")
+	require.Equal(t, 1, strings.Count(out, "callstack"),
+		"and a record below it does not")
+}
+
+func TestNewWithNoStacktraceLevelAttachesNothing(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	handler, _, err := logging.New(logging.Config{
+		Level:           "debug",
+		Format:          "json",
+		AsyncBufferSize: 64,
+	}, logging.WithOutput(&buf))
+	require.NoError(t, err)
+
+	slog.New(handler).Error("it broke")
+	require.NoError(t, shutdown(handler))
+
+	require.NotContains(t, buf.String(), "callstack")
 }

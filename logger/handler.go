@@ -123,6 +123,15 @@ func (h *consoleHandler) Handle(ctx context.Context, r slog.Record) error {
 	h.mu.Unlock()
 
 	attrs["logged_at"] = r.Time
+	// The console gets src as an argument; a sink only sees attrs, so without
+	// this the call site never leaves this handler and the Elasticsearch
+	// sink's log.origin.file.name is always absent. A record that logged its
+	// own "source" - the source of a payment, a feed - keeps it.
+	if src != "" {
+		if _, taken := attrs["source"]; !taken {
+			attrs["source"] = src
+		}
+	}
 	for _, s := range h.sinks {
 		_ = s.Handle(r.Level, r.Time, r.Message, attrs)
 	}
@@ -158,21 +167,31 @@ func (h *consoleHandler) writeConsole(level slog.Level, t time.Time, msg, src st
 		sb.WriteByte(' ')
 		sb.WriteString(colorize(darkGray, "src="+shortSource(src)))
 	}
-	var stack string
+	var stack, callstack string
 	for k, v := range attrs {
 		if k == "logged_at" {
 			continue
 		}
-		if k == stackKey {
+		switch k {
+		case stackKey:
 			stack, _ = v.(string)
+			continue
+		case callstackKey:
+			callstack, _ = v.(string)
 			continue
 		}
 		sb.WriteByte(' ')
 		sb.WriteString(colorize(darkGray, fmt.Sprintf("%s=%v", k, v)))
 	}
+	// Both blocks when both are there: where the failure began, then how the
+	// code reached the log statement.
 	if stack != "" {
 		frames := strings.Split(strings.TrimPrefix(stack, "\n"), "\n")
 		sb.WriteString(colorize(lightRed, FormatStack(frames)))
+	}
+	if callstack != "" {
+		frames := strings.Split(strings.TrimPrefix(callstack, "\n"), "\n")
+		sb.WriteString(colorize(lightRed, formatBlock("callstack", frames)))
 	}
 	_, _ = fmt.Fprintln(h.out, sb.String())
 }

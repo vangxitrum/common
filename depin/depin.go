@@ -143,7 +143,17 @@ type Error struct {
 	Temporary bool
 
 	detail string
+
+	// cause is the error underneath, when there was one: the SDK's error, or
+	// whatever a reader or the network reported. Unwrap returns it, so
+	// errors.Is and errors.As reach it.
+	cause error
 }
+
+// Unwrap returns the error underneath, or nil when the failure originated
+// here. It is what lets errors.Is find a context.Canceled or an io error
+// through a depin failure.
+func (e *Error) Unwrap() error { return e.cause }
 
 func (e *Error) Error() string {
 	msg := "depin: " + e.Op + ": " + e.Code

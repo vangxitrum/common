@@ -91,8 +91,10 @@ func TestAPlainErrorHasNoStack(t *testing.T) {
 	require.NotContains(t, line, stackKey)
 }
 
-// Critical's call-site stack, which has file paths, wins over the error's.
-func TestCriticalKeepsItsOwnStack(t *testing.T) {
+// Critical's call stack and the error's own stack both survive, in their own
+// fields: they answer different questions and used to share "stacktrace",
+// where the call stack won and the failure's origin was lost.
+func TestCriticalKeepsItsOwnStackBesideTheErrors(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -101,7 +103,13 @@ func TestCriticalKeepsItsOwnStack(t *testing.T) {
 	var line map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &line))
 	require.Equal(t, failure, line["err"])
-	require.Contains(t, line[stackKey], "errstack_test.go:")
+
+	require.Contains(t, line[stackKey], "logger.failing",
+		"stacktrace is where the failure began")
+	require.Contains(t, line[callstackKey],
+		"TestCriticalKeepsItsOwnStackBesideTheErrors",
+		"callstack is where the process was when it logged")
+	require.NotEqual(t, line[stackKey], line[callstackKey])
 }
 
 // The aioz-stream symptom, reproduced on a plain slog.TextHandler, and gone

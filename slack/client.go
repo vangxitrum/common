@@ -177,7 +177,8 @@ func (s *Slack) post(ctx context.Context, body []byte) (Receipt, *Error) {
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return Receipt{}, &Error{
-			Code: CodeTransport, Temporary: true, detail: err.Error(),
+			Code: CodeTransport, Temporary: true,
+			detail: err.Error(), cause: err,
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -187,6 +188,7 @@ func (s *Slack) post(ctx context.Context, body []byte) (Receipt, *Error) {
 		return Receipt{}, &Error{
 			Code: CodeTransport, Status: resp.StatusCode,
 			Temporary: true, detail: "the response could not be read",
+			cause: err,
 		}
 	}
 
@@ -211,6 +213,7 @@ func (s *Slack) post(ctx context.Context, body []byte) (Receipt, *Error) {
 		return Receipt{}, &Error{
 			Code: CodeUnavailable, Status: resp.StatusCode,
 			detail: "the response was not the documented JSON",
+			cause:  err,
 		}
 	}
 
