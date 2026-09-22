@@ -4,6 +4,32 @@
 
 ### Added
 
+**`postgres.Config.LogQueries` and `SlowQuery`: a query log.** `db.log-queries`
+logs every statement at debug; `db.slow-query` logs anything at or over a
+duration at warn. A failure is an error whatever the threshold says, and a slow
+statement is a warning rather than a warning and a debug line. Both are off by
+default, so a pool nobody configured logs nothing. The tracer is now installed
+for logging as well as for metrics, so `metrics: false` no longer turns the
+query log off with it.
+
+**Bind parameters are never logged.** pgx sends them separately from the
+statement, so what is logged is the parameterized form - `WHERE email = $1` -
+and the value that would identify a person stays out of the log.
+`TraceQueryStart` drops `data.Args` rather than carrying them to the logger.
+The statement is collapsed onto one line and capped at 2048 characters with a
+`...[truncated]` marker.
+
+**A db record is mapped to `db.*` in Elasticsearch.** A record carrying
+`group=db` has its `statement`, `operation`, `rows`, pool `name` and `duration`
+filed as `db.statement`, `db.operation`, `db.rows_affected`,
+`db.instance.name` and `event.duration`, the way an api-group record is already
+split into `http.*` and `url.*`. Left in `log.extra` they would be stored but
+not mapped, so "every UPDATE over 200ms" would not be a query anyone could
+write - which is the reason the statement is logged at all. The names follow
+OpenTelemetry's db semantic conventions; ECS has no database fieldset. **The
+matching `aioz-monitor` index template gains `db.*` and
+`log.origin.stack_trace`; the two changes only work as a pair.**
+
 **`logger.Config.StacktraceLevel` / `log.stacktrace-level`: the call stack of
 the log statement.** Every record at or above the configured level carries
 `callstack` - how the goroutine reached the log statement - the way zap's

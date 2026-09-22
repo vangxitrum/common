@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"time"
 
@@ -46,6 +47,16 @@ func operationOf(ctx context.Context) string {
 type tracer struct {
 	name monkit.SeriesTag
 
+	// log, logQueries and slowQuery are the query log; see querylog.go. log is
+	// nil when neither is configured, which is what turns the logging off.
+	log        *slog.Logger
+	logQueries bool
+	slowQuery  time.Duration
+
+	// metrics is Config.Metrics. The tracer is also installed for query
+	// logging alone, and then records nothing.
+	metrics bool
+
 	query    *monkit.DurationVal
 	batch    *monkit.DurationVal
 	batchLen *monkit.IntVal
@@ -54,9 +65,17 @@ type tracer struct {
 	acquire  *monkit.DurationVal
 }
 
-func newTracer(name monkit.SeriesTag) *tracer {
-	return &tracer{
-		name:     name,
+func newTracer(
+	log *slog.Logger,
+	name monkit.SeriesTag,
+	config Config,
+) *tracer {
+	t := &tracer{
+		name:       name,
+		logQueries: config.LogQueries,
+		slowQuery:  config.SlowQuery,
+		metrics:    config.Metrics,
+
 		query:    mon.DurationVal("postgres_query", name),
 		batch:    mon.DurationVal("postgres_batch", name),
 		batchLen: mon.IntVal("postgres_batch_length", name),
@@ -64,6 +83,10 @@ func newTracer(name monkit.SeriesTag) *tracer {
 		connect:  mon.DurationVal("postgres_connect", name),
 		acquire:  mon.DurationVal("postgres_acquire", name),
 	}
+	if config.wantsQueryLog() {
+		t.log = log
+	}
+	return t
 }
 
 // pgx finds these by asserting the one Tracer field up to each interface, so a
@@ -113,8 +136,13 @@ func (t *tracer) failed(ctx context.Context, event string, err error) {
 func (t *tracer) TraceQueryStart(
 	ctx context.Context,
 	_ *pgx.Conn,
-	_ pgx.TraceQueryStartData,
+	data pgx.TraceQueryStartData,
 ) context.Context {
+	// data.Args is deliberately dropped here rather than in the logger: what
+	// is never carried cannot be logged by mistake later.
+	if t.log != nil {
+		ctx = withSQL(ctx, data.SQL)
+	}
 	return started(ctx)
 }
 
@@ -133,10 +161,14 @@ func (t *tracer) TraceQueryEnd(
 	_ *pgx.Conn,
 	data pgx.TraceQueryEndData,
 ) {
-	t.query.Observe(elapsed(ctx))
-	if !errors.Is(data.Err, pgx.ErrNoRows) {
-		t.failed(ctx, "postgres_query_failed", data.Err)
+	duration := elapsed(ctx)
+	if t.metrics {
+		t.query.Observe(duration)
+		if !errors.Is(data.Err, pgx.ErrNoRows) {
+			t.failed(ctx, "postgres_query_failed", data.Err)
+		}
 	}
+	t.logQuery(ctx, duration, data.CommandTag, data.Err)
 }
 
 // TraceBatchStart implements pgx.BatchTracer.

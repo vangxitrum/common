@@ -98,6 +98,12 @@ type Config struct {
 	HealthTimeout  time.Duration `help:"bound on the startup ping and on Health"           default:"5s"`
 
 	Metrics bool `help:"record monkit series for queries and the pool" default:"true"`
+
+	// Query logging. Arguments are never logged: pgx sends them separately, so
+	// the statement is the parameterized form and the values that identify a
+	// person stay out of the log.
+	LogQueries bool          `help:"log every statement at debug level; bind parameters are never logged"          default:"false"`
+	SlowQuery  time.Duration `help:"log any statement taking at least this long at warn level; 0 disables it"      default:"0"`
 }
 
 // Validate reports settings that bind and parse but cannot work.
@@ -332,17 +338,18 @@ func OpenWith(
 
 	nameTag := monkit.NewSeriesTag("name", config.name())
 
-	if config.Metrics {
+	if config.Metrics || config.wantsQueryLog() {
 		// The assertions pgx makes to find the query, batch, connect and
 		// acquire hooks run inside NewWithConfig, so the tracer has to be in
 		// place before the pool is built - unlike go-redis, where the hook is
 		// added afterwards.
 		if poolConfig.ConnConfig.Tracer == nil {
-			poolConfig.ConnConfig.Tracer = newTracer(nameTag)
+			poolConfig.ConnConfig.Tracer = newTracer(log, nameTag, config)
 		} else {
 			// Replacing a caller's tracer would silently delete their tracing.
 			log.Warn(
-				"a pgx tracer is already installed; postgres metrics are off for this pool",
+				"a pgx tracer is already installed; "+
+					"postgres metrics and query logging are off for this pool",
 				"name",
 				config.name(),
 			)

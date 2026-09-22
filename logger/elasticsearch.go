@@ -290,7 +290,8 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 	// full-text searchable, so "all 5xx on /upload" is not a query anyone can
 	// write. The Graylog sink already splits it into discrete fields; this
 	// does the same, into the ECS names Kibana and Grafana both understand.
-	if group, _ := attrs["group"].(string); group == "api" {
+	group, _ := attrs["group"].(string)
+	if group == "api" {
 		parseRequestLine(doc, doc["message"].(string))
 	}
 	if s.cfg.Service != "" {
@@ -314,6 +315,16 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 		// They are always written where ECS puts them, declared or not: a
 		// stack trace filed under log.extra is a stack trace nobody finds, and
 		// a trace id that cannot be searched defeats having one.
+		// A db-group record carries the statement, its shape and its cost as
+		// discrete attributes. Left in log.extra they would be stored but not
+		// mapped, so "every UPDATE over 200ms" would not be a query anyone
+		// could write - which is the reason the statement is logged at all.
+		if group == "db" {
+			if mapped := setDBField(doc, k, v); mapped {
+				continue
+			}
+		}
+
 		switch k {
 		case "source":
 			if src, ok := v.(string); ok {
@@ -415,6 +426,37 @@ func parseRequestLine(doc map[string]any, msg string) {
 			}
 		}
 	}
+}
+
+// setDBField files one attribute of a db-group record under its ECS-style
+// home, reporting whether it belonged to one. Anything else - the caller's
+// operation name, say - falls through to the ordinary label/extra split.
+//
+// The names follow OpenTelemetry's db semantic conventions rather than ECS,
+// which has no database fieldset: db.statement, db.operation and
+// db.rows_affected. The index template maps them.
+func setDBField(doc map[string]any, key string, value any) bool {
+	switch key {
+	case "group":
+		return true // the marker itself is not a field
+	case "statement", "operation":
+		setNestedValue(doc, "db", key, value)
+		return true
+	case "rows":
+		setNestedValue(doc, "db", "rows_affected", value)
+		return true
+	case "name":
+		// Which pool, for a service with more than one.
+		setNested(doc, "db", "instance", map[string]any{"name": value})
+		return true
+	case "duration":
+		if d, ok := value.(time.Duration); ok {
+			// ECS measures event.duration in nanoseconds.
+			doc["event"] = map[string]any{"duration": d.Nanoseconds()}
+			return true
+		}
+	}
+	return false
 }
 
 // setNested merges sub into doc[top][mid], creating the objects as needed.

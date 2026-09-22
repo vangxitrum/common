@@ -496,3 +496,65 @@ func TestElasticsearchSink_CallstackWithNoSource(t *testing.T) {
 	require.Equal(t, "app/api.(*H).Get:12", origin["stack_trace"])
 	require.NotContains(t, origin, "file")
 }
+
+func TestElasticsearchSink_MapsADbRecord(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelWarn, time.Now(), "slow query",
+		map[string]any{
+			"group":     "db",
+			"statement": "SELECT id FROM users WHERE email = $1",
+			"operation": "SELECT",
+			"duration":  250 * time.Millisecond,
+			"rows":      int64(1),
+			"name":      "primary",
+			"op":        "invoice reconciliation",
+		}))
+
+	_, _, docs := recv.snapshot()
+	require.Len(t, docs, 1)
+	doc := docs[0]
+
+	db := doc["db"].(map[string]any)
+	require.Equal(t, "SELECT id FROM users WHERE email = $1", db["statement"],
+		"the parameterized statement is searchable, not just prose in a message")
+	require.Equal(t, "SELECT", db["operation"])
+	require.Equal(t, float64(1), db["rows_affected"])
+	require.Equal(t, "primary", db["instance"].(map[string]any)["name"])
+
+	require.Equal(t, float64(250_000_000),
+		doc["event"].(map[string]any)["duration"],
+		"ECS measures duration in nanoseconds")
+
+	// The message still reads as prose in Discover.
+	require.Equal(t, "slow query", doc["message"])
+
+	extra, _ := doc["log"].(map[string]any)["extra"].(map[string]any)
+	require.NotContains(t, extra, "statement",
+		"a field with an ECS home is not duplicated into log.extra")
+	require.NotContains(t, extra, "duration")
+	require.Equal(t, "invoice reconciliation", extra["op"],
+		"the caller's operation name has no ECS home, so it ships as extra")
+}
+
+func TestElasticsearchSink_ANonDbRecordKeepsItsAttributes(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	// "statement" outside a db record means something else entirely.
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "filed",
+		map[string]any{"statement": "a bank statement"}))
+
+	_, _, docs := recv.snapshot()
+	require.Len(t, docs, 1)
+	require.NotContains(t, docs[0], "db")
+	require.Equal(t, "a bank statement",
+		docs[0]["log"].(map[string]any)["extra"].(map[string]any)["statement"])
+}

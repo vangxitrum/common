@@ -146,6 +146,42 @@ latency should wrap its own method in `mon.Task()` - one line, at a call site
 where the name is a compile-time constant, and it includes the row scanning that
 `postgres_query` excludes.
 
+## The query log: statements yes, arguments never
+
+Metrics say *how long*; the query log says *which statement*. Two knobs, both
+off by default, so a pool nobody configured logs nothing:
+
+```
+db:
+  log-queries: false   # every statement, at debug
+  slow-query: 200ms    # any statement at or over this, at warn; 0 disables
+```
+
+A failure is logged as an error whatever the threshold says. A slow statement
+is a warning, not a warning *and* a debug line. `pgx.ErrNoRows` is an empty
+result, so it is neither.
+
+**Bind parameters are never logged, and cannot be.** pgx sends parameters
+separately from the statement, so what is logged is the parameterized form -
+`WHERE email = $1` - and the value that would identify a person stays out of
+the log entirely. `TraceQueryStart` drops `data.Args` rather than carrying them
+to the logger: what is never carried cannot be logged by mistake later.
+
+The statement is whitespace-collapsed onto one line, because a query written
+across fifteen indented lines otherwise becomes fifteen log lines, and capped at
+2048 characters with a ` ...[truncated]` marker so a generated `IN` list does
+not become the log.
+
+Each record carries `group=db`, the pool `name`, the `statement`, its
+`operation` (the leading keyword: `SELECT`, `UPDATE`, ...), the `duration`, and
+either `rows` or `err`. `WithOperation` adds `op`. The Elasticsearch sink maps
+those to `db.statement`, `db.operation`, `db.rows_affected`,
+`db.instance.name` and `event.duration`, so "every `UPDATE` over 200ms on the
+primary pool" is a query a dashboard can actually run - which is the whole
+reason the statement is logged rather than left inside a message string.
+
+The tracer is installed when either knob is on, even with `metrics: false`.
+
 ## What `postgres_query` actually measures
 
 From the start of the query to the close of its `Rows`, not server time.
