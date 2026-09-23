@@ -30,11 +30,8 @@ type Config struct {
 	// level, as the "callstack" attribute. Nil disables it, which is the
 	// default. slog.LevelError is the usual choice.
 	//
-	// This is not the error's own stack. That one says where a failure began,
-	// is taken from the error by [ErrorStack], and goes in "stacktrace". Both
-	// can appear on one record and neither replaces the other. A record that
-	// already carries a "callstack" keeps it, so [Critical]'s own capture -
-	// taken at the call site rather than here - wins.
+	// A record that already carries a "callstack" keeps it, so [Critical]'s
+	// own capture - taken at the call site rather than here - wins.
 	//
 	// The capture costs a runtime.Callers walk per record at or above the
 	// level, on the caller's goroutine, so a threshold below Warn on a busy

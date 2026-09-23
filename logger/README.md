@@ -262,8 +262,8 @@ logger.Config{
 Documents are ECS-shaped, so a Kibana data view over `logs-aioz-*` works
 without configuring fields: `@timestamp`, `message`, `log.level`
 (`DEBUG`/`INFO`/`WARN`/`ERROR`/`CRITICAL`), `log.origin.file.name` from
-`AddSource`, `error.message` and `error.stack_trace` from an `error` attribute
-and `logger.Critical`, and `trace.id` from a `trace_id` attribute. ANSI
+`AddSource`, `log.origin.stack_trace` from a `callstack`, `error.message` from
+an `error` attribute, and `trace.id` from a `trace_id` attribute. ANSI
 coloring is stripped.
 
 ### A service declares what it searches by
@@ -400,15 +400,15 @@ slog.Default().Enabled(ctx, logger.LevelCritical)
 For attaching a stack trace to any other log level, use `logger.Stack()`:
 
 ```go
-slog.Error("unexpected nil", "stacktrace", logger.Stack(), "component", "router")
+slog.Error("unexpected nil", "callstack", logger.Stack(), "component", "router")
 ```
 
-## Errors and their stacks
+## Errors
 
-Log an error as it is. The handler writes its message, and when something in
-its chain was made by [zeebo/errs](https://github.com/zeebo/errs), the stack of
-where it began goes in `stacktrace`, which the console prints as a block under
-the line:
+Log an error as it is.
+The handler writes its message, never the `%+v` form that glues a
+[zeebo/errs](https://github.com/zeebo/errs) stack onto it, and JSON and every
+sink get it as a string rather than `{}`:
 
 ```go
 slog.Error("chore pass failed; retrying next interval", "err", err)
@@ -416,29 +416,16 @@ slog.Error("chore pass failed; retrying next interval", "err", err)
 
 ```
 [2026-09-14 11:04:40.603] ERR chore pass failed; retrying next interval chore=user:delete-expired-refresh-tokens err=user: ERROR: relation "refresh_tokens" does not exist (SQLSTATE 42P01)
-  stack:
-    vms-v2/internal/app/user.(*Service).DeleteExpiredRefreshTokens:254
-    vms-v2/internal/utils/chore.(*Chore).Run.func1:81
-    aioz-common/cycle.(*Cycle).Run:84
-    vms-v2/internal/utils/chore.(*Chore).Run:76
 ```
 
-- JSON, the file sink and Graylog get `err` as a string and `stacktrace` as
-  one `function:line` per line.
-- The frames are trimmed. The host and owner are dropped from each import path
-  (`10.0.0.50/tuan.quang.tran/vms-v2/...` becomes `vms-v2/...`), and the
-  runtime, errgroup and lifecycle frames that start every goroutine are left
-  out.
+The error's own stack is not logged.
+The one stack a record carries is the call stack of the log statement.
 
 ### The call stack of the log statement
 
-`stacktrace` says where a failure **began**. It comes from the error, so it
-only exists when something in the chain is a zeebo/errs error - a
-`depin`/`slack`/`s3client`/`mail` `*Error` carries no stack of its own.
-
-`callstack` is the other question: how the goroutine **reached** the log
-statement. Set `StacktraceLevel` and every record at or above it carries one,
-the way zap's `AddStacktrace` does:
+`callstack` says how the goroutine **reached** the log statement.
+Set `StacktraceLevel` and every record at or above it carries one, the way
+zap's `AddStacktrace` does:
 
 ```go
 logger.Config{StacktraceLevel: slog.LevelError}
@@ -458,24 +445,23 @@ log:
     vms-v2/internal/server.(*Server).ServeHTTP:120
 ```
 
-- The two never displace each other. A record can carry both, and each keeps
-  its own block on the console and its own field elsewhere.
-- Elasticsearch files `stacktrace` under ECS `error.stack_trace` and
-  `callstack` under `log.origin.stack_trace`, beside `log.origin.file.name`
-  from `AddSource`. A call stack is a property of the log event, not of any
-  error, and a `Critical` with no error would otherwise invent one.
+- JSON, the file sink and Graylog get `callstack` as one `function:line` per
+  line.
+  Elasticsearch files it under `log.origin.stack_trace`, beside the
+  `log.origin.file.name` from `AddSource`.
+- The frames are trimmed.
+  The host and owner are dropped from each import path
+  (`10.0.0.50/tuan.quang.tran/vms-v2/...` becomes `vms-v2/...`), and the
+  runtime, errgroup and lifecycle frames that start every goroutine are left
+  out.
 - A record that already carries a `callstack` keeps it, so
   [`Critical`](#critical) - which captures at the call site - wins over the
   automatic capture, and `logger.Stack()` lets you attach one by hand at any
   level.
 - The capture is a `runtime.Callers` walk per qualifying record, on the
-  caller's goroutine. A threshold below `warn` on a busy service is worth
-  measuring first. It is off unless configured.
-- The stack is found through `fmt.Errorf("%w")` and through an `apierr`,
-  whose cause's stack is taken before it resolves to its message. See
-  [`errs2.Frames`](../errs2/README.md).
-- A record gets the stack of its first error. `Critical`'s call-site stack
-  wins over it.
+  caller's goroutine.
+  A threshold below `warn` on a busy service is worth measuring first.
+  It is off unless configured.
 
 ### In a handler built on slog.TextHandler
 
@@ -487,36 +473,18 @@ newline escaped:
 err="user: ERROR: relation \"refresh_tokens\" ...\n\tvms-v2/internal/app/user...:254\n\t..."
 ```
 
-A handler that wraps one, such as a service's own colorizing handler, can use
-the same pieces this package uses:
+A handler that wraps one, such as a service's own colorizing handler, can log
+the message alone with `ErrorAttr`:
 
 ```go
 inner := slog.NewTextHandler(buf, &slog.HandlerOptions{
     // After any other ReplaceAttr, such as logging.RedactAttr().
     ReplaceAttr: logger.ErrorAttr,
 })
-
-// In Handle, before the inner handler formats the record, so an apierr is
-// still an error rather than its resolved message:
-var stack []string
-r.Attrs(func(a slog.Attr) bool {
-    if err, ok := a.Value.Any().(error); ok && stack == nil {
-        stack = logger.ErrorStack(err)
-    }
-    return true
-})
-
-// And when the line is printed:
-fmt.Println(line + logger.FormatStack(stack))
 ```
-
-An error attached with `With` reaches only `ErrorAttr` inside the wrapped
-handler, so it is logged as its message with no stack.
 
 | Function | Description |
 |----------|-------------|
-| `ErrorStack(err) []string` | Where `err` began, trimmed; nil when nothing in its chain carries a stack |
-| `FormatStack(frames) string` | The `"\n  stack:"` block the console prints under a line; `""` for none |
 | `ErrorAttr` | A `ReplaceAttr` that logs an error value as its message |
 
 ## Dynamic log level

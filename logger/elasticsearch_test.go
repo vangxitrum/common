@@ -141,7 +141,7 @@ func TestElasticsearchSink_DocumentShape(t *testing.T) {
 	require.NoError(t, sink.Handle(LevelCritical, time.Now(), "\x1b[31mred message\x1b[0m", map[string]any{
 		"logged_at": loggedAt,
 		"source":    "/app/main.go:42",
-		stackKey:    "main.boom\n\t/app/main.go:42",
+		"error":     "boom",
 		"trace_id":  "trace-1",
 		"user_id":   "user-1",
 		"attempts":  3,
@@ -158,7 +158,8 @@ func TestElasticsearchSink_DocumentShape(t *testing.T) {
 	require.Equal(t, "testhost", doc["host"].(map[string]any)["name"],
 		"host.name is the machine, service.name is the service - they are not the same field")
 	require.Equal(t, "trace-1", doc["trace"].(map[string]any)["id"])
-	require.Contains(t, doc["error"].(map[string]any)["stack_trace"], "main.boom")
+	require.Equal(t, "boom", doc["error"].(map[string]any)["message"])
+	require.NotContains(t, doc["error"], "stack_trace")
 
 	origin := doc["log"].(map[string]any)["origin"].(map[string]any)
 	require.Equal(t, "/app/main.go:42", origin["file"].(map[string]any)["name"])
@@ -173,7 +174,7 @@ func TestElasticsearchSink_DocumentShape(t *testing.T) {
 	require.NotContains(t, doc, "labels", "nothing here was declared as a label")
 }
 
-func TestElasticsearchSink_ErrorMessageJoinsTheStackTrace(t *testing.T) {
+func TestElasticsearchSink_ErrorIsFiledAsErrorMessage(t *testing.T) {
 	recv := newBulkRecorder(t)
 	cfg := testESConfig(recv.URL)
 	cfg.BatchSize = 1
@@ -181,14 +182,13 @@ func TestElasticsearchSink_ErrorMessageJoinsTheStackTrace(t *testing.T) {
 	defer func() { _ = sink.Close() }()
 
 	require.NoError(t, sink.Handle(LevelCritical, time.Now(), "it broke", map[string]any{
-		"error":  "boom",
-		stackKey: "main.boom",
+		"error": "boom",
 	}))
 
 	_, _, docs := recv.snapshot()
 	errObj := docs[0]["error"].(map[string]any)
-	require.Equal(t, "boom", errObj["message"], "the message belongs with the stack trace")
-	require.Equal(t, "main.boom", errObj["stack_trace"])
+	require.Equal(t, map[string]any{"message": "boom"}, errObj,
+		"the message and nothing else: an error's own stack is not logged")
 	require.NotContains(t, docs[0], "labels", "nothing should be left over in labels")
 }
 
@@ -333,7 +333,6 @@ func TestElasticsearchSink_StructuralFieldsAreIndexedUndeclared(t *testing.T) {
 	require.NoError(t, sink.Handle(slog.LevelError, time.Now(), "m", map[string]any{
 		"trace_id": "trace-1",
 		"error":    "boom",
-		stackKey:   "main.boom\n\t/app/main.go:42",
 		"source":   "/app/main.go:42",
 	}))
 
@@ -341,10 +340,9 @@ func TestElasticsearchSink_StructuralFieldsAreIndexedUndeclared(t *testing.T) {
 	doc := docs[0]
 
 	// These describe the event, not a dimension of it: filing them under an
-	// unmapped object would make a stack trace nobody can search for.
+	// unmapped object would make a failure nobody can search for.
 	require.Equal(t, "trace-1", doc["trace"].(map[string]any)["id"])
 	require.Equal(t, "boom", doc["error"].(map[string]any)["message"])
-	require.Contains(t, doc["error"].(map[string]any)["stack_trace"], "main.boom")
 	require.NotNil(t, doc["log"].(map[string]any)["origin"])
 	require.NotContains(t, doc["log"], "extra")
 }
@@ -442,7 +440,7 @@ func TestElasticsearchSink_URLNeedsNoTrailingSlashCare(t *testing.T) {
 	require.NoError(t, sink.Close())
 }
 
-func TestElasticsearchSink_CallstackIsNotAnErrorStackTrace(t *testing.T) {
+func TestElasticsearchSink_CallstackGoesUnderLogOrigin(t *testing.T) {
 	recv := newBulkRecorder(t)
 	cfg := testESConfig(recv.URL)
 	cfg.BatchSize = 1
@@ -453,7 +451,7 @@ func TestElasticsearchSink_CallstackIsNotAnErrorStackTrace(t *testing.T) {
 		slog.LevelError, time.Now(), "it broke",
 		map[string]any{
 			"source":     "/app/main.go:42",
-			stackKey:     "app/store.Fetch:88",
+			"error":      "boom",
 			callstackKey: "app/api.(*H).Get:12\napp/router.Serve:40",
 		},
 	))
@@ -468,9 +466,8 @@ func TestElasticsearchSink_CallstackIsNotAnErrorStackTrace(t *testing.T) {
 	require.Contains(t, origin["stack_trace"], "app/api.(*H).Get:12",
 		"and the call stack sits beside it, under log.origin")
 
-	require.Equal(t, "app/store.Fetch:88",
-		doc["error"].(map[string]any)["stack_trace"],
-		"error.stack_trace stays the error's own")
+	require.NotContains(t, doc["error"], "stack_trace",
+		"a call stack is not an error's stack trace")
 
 	extra, _ := doc["log"].(map[string]any)["extra"].(map[string]any)
 	require.NotContains(t, extra, callstackKey,

@@ -333,20 +333,16 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 				logOrigin(doc)["file"] = map[string]any{"name": src}
 				continue
 			}
-		case stackKey:
-			setError(doc, "stack_trace", stripANSI(fmt.Sprint(v)))
-			continue
 		case callstackKey:
-			// Not error.stack_trace: this is where the process was when it
-			// logged, which is a property of the log event and not of any
-			// error. It sits beside log.origin.file.name, which says the same
-			// thing one frame deep.
+			// This is where the process was when it logged, which is a
+			// property of the log event and not of any error. It sits beside
+			// log.origin.file.name, which says the same thing one frame deep.
 			logOrigin(doc)["stack_trace"] = stripANSI(fmt.Sprint(v))
 			continue
 		case "error":
-			// ECS keeps the message next to the stack trace. Leaving it in
-			// labels instead would split one failure across two places.
-			setError(doc, "message", stripANSI(fmt.Sprint(v)))
+			// ECS files the failure under error.message, where Kibana looks
+			// for it.
+			setNestedValue(doc, "error", "message", stripANSI(fmt.Sprint(v)))
 			continue
 		case "trace_id":
 			doc["trace"] = map[string]any{"id": fmt.Sprint(v)}
@@ -486,8 +482,6 @@ func isHTTPMethod(s string) bool {
 	return false
 }
 
-// setError merges one field into the document's error object, which both the
-// stack trace and the message write to.
 // logOrigin returns doc's log.origin object, creating it if this is the first
 // field to land there. Both "source" and "callstack" write into it, and map
 // iteration decides which arrives first.
@@ -503,15 +497,6 @@ func logOrigin(doc map[string]any) map[string]any {
 		log["origin"] = origin
 	}
 	return origin
-}
-
-func setError(doc map[string]any, key string, value any) {
-	errObj, _ := doc["error"].(map[string]any)
-	if errObj == nil {
-		errObj = map[string]any{}
-		doc["error"] = errObj
-	}
-	errObj[key] = value
 }
 
 // ecsLevel renders a level the way ECS spells it. The console's three-letter
