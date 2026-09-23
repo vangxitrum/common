@@ -31,7 +31,16 @@ func backdate(ctx context.Context, took time.Duration) context.Context {
 }
 
 // recorded renders every record, for a test asserting on what is absent.
-func recorded(rec *logtest.Recorder) string { return fmt.Sprint(rec.All()) }
+// recorded is what a leak assertion reads: the message and the
+// attributes of every record, without the wall-clock time, which is one more
+// place a parameter's digits could appear to be present when they are not.
+func recorded(rec *logtest.Recorder) string {
+	var b strings.Builder
+	for _, r := range rec.All() {
+		fmt.Fprintf(&b, "%s %s %v\n", r.Level, r.Message, r.Attrs)
+	}
+	return b.String()
+}
 
 // run drives one query through the tracer the way pgx does.
 func run(tr *tracer, sql string, took time.Duration, tag string, err error) {
@@ -39,8 +48,15 @@ func run(tr *tracer, sql string, took time.Duration, tag string, err error) {
 		context.Background(),
 		nil,
 		pgx.TraceQueryStartData{
-			SQL:  sql,
-			Args: []any{"secret@example.com", 42},
+			SQL: sql,
+			// The non-string parameter is long and distinctive on purpose:
+			// a short number turns up inside a measured duration or a
+			// timestamp sooner or later ("42" landed in both 1.000421ms and
+			// 17:58:00.260342962), which made the leak assertion below fail
+			// on the clock rather than on a leak.
+			// int64, not an untyped constant: this overflows int on the
+			// 32-bit build CI vets.
+			Args: []any{"secret@example.com", int64(4242424242)},
 		},
 	)
 	ctx = backdate(ctx, took)
@@ -85,13 +101,15 @@ func TestArgumentsAreNeverLogged(t *testing.T) {
 	run(tr, "SELECT id FROM users WHERE email = $1", time.Millisecond,
 		"SELECT 1", nil)
 
+	logged := recorded(rec)
 	require.NotContains(
 		t,
-		recorded(rec),
+		logged,
 		"secret@example.com",
 		"bind parameters are the PII; only the parameterized statement is logged",
 	)
-	require.NotContains(t, recorded(rec), "42")
+	require.NotContains(t, logged, "4242424242",
+		"nor the ones that are not strings")
 }
 
 func TestSlowQueryLogsAtWarnOnly(t *testing.T) {

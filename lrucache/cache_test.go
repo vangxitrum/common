@@ -277,3 +277,174 @@ func (c *checker) Check(ctx context.Context, key string, calls int) {
 	require.Equal(c.t, value, key)
 	require.NoError(c.t, err)
 }
+
+// Add must keep the order list and the map in step. When it evicted, it
+// deleted the map entry and left the list element behind, so the list grew
+// without bound and every later eviction picked a key that was already gone -
+// which let the map grow past Capacity too.
+func TestCache_Add_EvictsFromBothTheMapAndTheList(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[int](Options{Capacity: 2})
+
+	for i := range 100 {
+		cache.Add(ctx, strconv.Itoa(i), i)
+	}
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.LessOrEqual(t, len(cache.data), 2, "the map must respect Capacity")
+	require.Equal(t, len(cache.data), cache.order.Len(),
+		"an evicted key must leave neither a map entry nor a list element")
+}
+
+// Replacing a key must not evict another one: the entry count does not grow.
+func TestCache_Add_ReplacingDoesNotEvict(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[int](Options{Capacity: 2})
+	cache.Add(ctx, "a", 1)
+	cache.Add(ctx, "b", 2)
+
+	require.True(t, cache.Add(ctx, "a", 10), "a was there")
+
+	_, cached := cache.GetCached(ctx, "b")
+	require.True(t, cached, "replacing a must not have evicted b")
+	value, cached := cache.GetCached(ctx, "a")
+	require.True(t, cached)
+	require.Equal(t, 10, value)
+}
+
+// A non-positive Capacity disables the cache, which Get already honors. Add
+// used to read the back of an empty list and panic on it.
+func TestCache_Add_WithCachingDisabled(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[int](Options{Capacity: 0})
+
+	require.False(t, cache.Add(ctx, "a", 1))
+	_, cached := cache.GetCached(ctx, "a")
+	require.False(t, cached, "a disabled cache stores nothing")
+}
+
+// An entry that carries its own expiry - a signed URL, a download ticket, an
+// access token - must stop being served before that expiry, or a caller is
+// handed one that whatever issued it is about to refuse.
+func TestCache_AddUntil_StopsServingEarly(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[string](Options{Capacity: 2, EarlyExpiry: time.Minute})
+
+	now := time.Now()
+	expiry := now.Add(10 * time.Minute)
+	require.False(t, cache.AddUntil(ctx, "ticket", "signed", expiry))
+
+	value, cached := cache.GetCached(ctx, "ticket")
+	require.True(t, cached, "well clear of the expiry")
+	require.Equal(t, "signed", value)
+
+	// Nine minutes on it is still outside the one-minute margin.
+	at := func(d time.Duration) context.Context {
+		timeCtx, _ := time2.WithNewMachine(
+			ctx, time2.WithTimeAt(now.Add(d)),
+		)
+		return timeCtx
+	}
+	_, cached = cache.GetCached(at(8*time.Minute), "ticket")
+	require.True(t, cached, "two minutes of validity left is still served")
+
+	// At the margin it is gone, a whole minute before it actually expires.
+	_, cached = cache.GetCached(at(9*time.Minute), "ticket")
+	require.False(t, cached,
+		"a value about to be refused must not be handed out")
+}
+
+// Get reads the same predicate, so an AddUntil entry is not served stale to a
+// caller that came through the filling path.
+func TestCache_AddUntil_IsHonoredByGet(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[string](Options{Capacity: 2, EarlyExpiry: time.Minute})
+
+	now := time.Now()
+	cache.AddUntil(ctx, "ticket", "stale", now.Add(2*time.Minute))
+
+	timeCtx, _ := time2.WithNewMachine(
+		ctx, time2.WithTimeAt(now.Add(90*time.Second)),
+	)
+	value, err := cache.Get(timeCtx, "ticket", func() (string, error) {
+		return "fresh", nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fresh", value, "the entry was inside its margin")
+}
+
+// A zero EarlyExpiry is no margin at all: the value is served until the
+// instant it expires.
+func TestCache_AddUntil_WithoutAMargin(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[string](Options{Capacity: 2})
+
+	now := time.Now()
+	cache.AddUntil(ctx, "ticket", "signed", now.Add(time.Minute))
+
+	at := func(d time.Duration) context.Context {
+		timeCtx, _ := time2.WithNewMachine(
+			ctx, time2.WithTimeAt(now.Add(d)),
+		)
+		return timeCtx
+	}
+	_, cached := cache.GetCached(at(59*time.Second), "ticket")
+	require.True(t, cached)
+	_, cached = cache.GetCached(at(time.Minute), "ticket")
+	require.False(t, cached, "expired is expired")
+}
+
+// A value that is already inside its margin is worth nothing, so it is not
+// stored - and it still invalidates what it replaced, because it is the
+// current value and it is dead.
+func TestCache_AddUntil_RefusesAnExpiredValue(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[string](Options{Capacity: 2, EarlyExpiry: time.Minute})
+	require.False(t, cache.AddUntil(ctx, "ticket", "old", time.Now().Add(time.Hour)))
+
+	replaced := cache.AddUntil(
+		ctx, "ticket", "already dead", time.Now().Add(30*time.Second),
+	)
+	require.True(t, replaced, "the live entry it displaced is reported")
+
+	_, cached := cache.GetCached(ctx, "ticket")
+	require.False(t, cached, "neither value is served")
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Empty(t, cache.data)
+	require.Zero(t, cache.order.Len(), "and nothing is left in either half")
+}
+
+// Expiration still governs staleness on top of the entry's own expiry,
+// whichever runs out first.
+func TestCache_AddUntil_StillObeysExpiration(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[string](Options{Capacity: 2, Expiration: time.Second})
+
+	now := time.Now()
+	cache.AddUntil(ctx, "ticket", "signed", now.Add(time.Hour))
+
+	timeCtx, _ := time2.WithNewMachine(
+		ctx, time2.WithTimeAt(now.Add(2*time.Second)),
+	)
+	_, cached := cache.GetCached(timeCtx, "ticket")
+	require.False(t, cached, "the TTL from insertion ran out first")
+}

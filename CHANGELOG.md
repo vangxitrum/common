@@ -42,6 +42,22 @@ and no coordinator.
 **The go-sdk pin moves to `ef2115da4a3b`**, which is where
 `DownloadFileRange`, `CreateDownloadTicketLocal` and `GetAccount` live.
 
+**`lrucache.Options.EarlyExpiry` and `AddUntil`: a value that carries its own
+expiry.** A signed URL, a download ticket or an access token expires on its own
+schedule, whatever the cache's TTL says, and handing one out a second before it
+dies means the caller gets it refused. `AddUntil(ctx, key, value, expiresAt)`
+stores the value's own expiry and `EarlyExpiry` is how long before it the cache
+stops serving the entry. The margin is exclusive, so at exactly `EarlyExpiry`
+before the expiry the entry is already gone; a value that is already inside its
+margin is not stored, and it still invalidates whatever it replaced, because it
+is the current value and it is dead. `Expiration` still applies on top,
+whichever runs out first, and `Get` reads the same predicate as `GetCached`, so
+neither path serves an entry the other would refuse.
+
+`EarlyExpiry` does nothing for an `Add` entry: `Expiration` is measured from
+insertion, so subtracting a margin from it would only be a shorter
+`Expiration`.
+
 **`postgres.Config.LogQueries` and `SlowQuery`: a query log.** `db.log-queries`
 logs every statement at debug; `db.slow-query` logs anything at or over a
 duration at warn. A failure is an error whatever the threshold says, and a slow
@@ -110,6 +126,28 @@ wanted, and a `Critical` with no error filed a call stack as
 should move to `log.origin.stack_trace`.**
 
 ### Fixed
+
+**`lrucache.Add` grew the cache without bound and broke `Capacity`.** When it
+evicted, it deleted the map entry but left the list element in place, so the
+order list grew for every insert and every later eviction picked a key that was
+already gone - which meant nothing was actually evicted and the map grew too.
+A cache with `Capacity: 2` held 99 entries after 99 adds; `Get`'s own eviction
+path was always correct, so only the `Add`/`GetCached` pair leaked. Eviction
+now takes the key out of both halves and repeats until there is room, and
+replacing an existing key no longer evicts a different one to make space for
+it.
+
+**`lrucache.Add` panicked when caching was disabled.** A non-positive
+`Capacity` disables the cache, which `Get` has always honored by calling
+straight through, but `Add` read the back of an empty list and dereferenced
+nil. It now stores nothing and reports `replaced` as false.
+
+**`postgres`'s bind-parameter leak test failed on the clock.** It asserted the
+formatted records did not contain `42`, the non-string parameter, and two
+digits turn up inside a measured duration (`1.000421ms`) or a timestamp
+(`17:58:00.260342962`) often enough to fail a clean run. The parameter is now
+long and distinctive and the assertion reads the message and attributes
+without the wall-clock time.
 
 **The call site reaches the sinks, so `log.origin.file.name` is no longer
 always absent.** With `AddSource`, the console handler computed the caller's
