@@ -11,13 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// collect drains a StatSource into a field -> value map.
+// collect drains a StatSource into a field -> value map of the version_info
+// series. The build_info series emitted alongside it carries identity as tags
+// rather than numbers, so it has its own helper (buildInfoTags).
 func collect(t *testing.T, src monkit.StatSource) map[string]float64 {
 	t.Helper()
 
 	out := map[string]float64{}
 	src.Stats(func(key monkit.SeriesKey, field string, val float64) {
-		require.Equal(t, "version_info", key.Measurement)
+		require.Contains(t, []string{"version_info", "build_info"}, key.Measurement)
+		if key.Measurement != "version_info" {
+			return
+		}
 		out[field] = val
 	})
 	return out
@@ -109,4 +114,67 @@ func TestBuildRegistersWithMonkit(t *testing.T) {
 
 	require.True(t, found["major"], "version_info should reach the registry")
 	require.True(t, found["release"])
+}
+
+// buildInfoTags drains a StatSource and returns the tags of the build_info
+// series, plus the tag sets seen on version_info.
+func buildInfoTags(t *testing.T, src monkit.StatSource) (build map[string]string, versionInfoTagged bool) {
+	t.Helper()
+
+	src.Stats(func(key monkit.SeriesKey, field string, val float64) {
+		tags := map[string]string{}
+		for k, v := range key.Tags.All() {
+			tags[k] = v
+		}
+
+		switch key.Measurement {
+		case "build_info":
+			require.Equal(t, "value", field)
+			require.Equal(t, float64(1), val, "build_info is a constant 1 series")
+			build = tags
+		case "version_info":
+			if len(tags) > 0 {
+				versionInfoTagged = true
+			}
+		default:
+			t.Fatalf("unexpected measurement %q", key.Measurement)
+		}
+	})
+	return build, versionInfoTagged
+}
+
+func TestStatsBuildInfoCarriesReadableIdentity(t *testing.T) {
+	t.Parallel()
+
+	v, err := version.NewSemVer("v3.14.15")
+	require.NoError(t, err)
+
+	info := version.Info{
+		Version:    v,
+		CommitHash: "7077c772a20dc5581ac53802fec947fa166e1cf6",
+		Timestamp:  time.Now(),
+	}
+
+	build, versionInfoTagged := buildInfoTags(t, &info)
+
+	require.Equal(t, "7077c77", build["commit"], "commit should be the 7-char short hash")
+	require.Equal(t, "v3.14.15", build["version"])
+	require.Equal(t, "false", build["modified"])
+
+	// The whole point of a separate series: an upgrade must not mint a new
+	// series for each of version_info's eleven numeric fields.
+	require.False(t, versionInfoTagged,
+		"version_info must stay untagged so its series survive a version change")
+}
+
+func TestStatsBuildInfoOmitsWhatItDoesNotKnow(t *testing.T) {
+	t.Parallel()
+
+	// A binary built outside a git checkout has neither. An empty tag value is
+	// worse than an absent one: it becomes a real label every query must match.
+	build, _ := buildInfoTags(t, &version.Info{Timestamp: time.Now()})
+
+	require.NotContains(t, build, "commit")
+	require.NotContains(t, build, "version")
+	require.Equal(t, "false", build["modified"])
 }

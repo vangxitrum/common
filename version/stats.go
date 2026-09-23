@@ -3,6 +3,7 @@ package version
 import (
 	"hash/crc32"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -64,6 +65,29 @@ func Register(registry *monkit.Registry) {
 // Call [Register] once at startup to attach it.
 func (v *Info) Stats(cb func(key monkit.SeriesKey, field string, val float64)) {
 	key := monkit.NewSeriesKey("version_info")
+
+	// Identity rides on its own constant series rather than as tags on the
+	// fields below. A field's VALUE changing is free - it stays the same
+	// series - but a LABEL changing mints a new one, so tagging all eleven
+	// fields would turn every upgrade into eleven new series per process. On a
+	// fleet of independently-operated nodes that is the difference between
+	// negligible and a real cost, which is why Storj encodes the commit as a
+	// CRC32 value and never as a label.
+	//
+	// One series per process per build is the Prometheus build_info
+	// convention, and depin already settled on it independently
+	// (edgeserver.recordBuildInfo). The CRC32 field below stays: it answers
+	// "did the build change" without minting anything at all, which is what
+	// counting distinct live builds needs.
+	buildKey := monkit.NewSeriesKey("build_info")
+	if v.CommitHash != "" {
+		buildKey = buildKey.WithTag("commit", shortCommit(v.CommitHash))
+	}
+	if ver := v.Version.String(); ver != "" {
+		buildKey = buildKey.WithTag("version", ver)
+	}
+	buildKey = buildKey.WithTag("modified", strconv.FormatBool(v.Modified))
+	cb(buildKey, "value", 1)
 
 	cb(key, "release", boolAsFloat(v.Release))
 	cb(key, "modified", boolAsFloat(v.Modified))
