@@ -245,7 +245,13 @@ func (e *ExpiringLRUOf[T]) add(
 		when:      time2.Now(ctx),
 		expiresAt: expiresAt,
 		value:     value,
+		loaded:    true,
 	}
+	// The fill is spent: a later Get must serve this value rather than run its
+	// own function and overwrite it. Get waits on the once whatever loaded
+	// says, so the once has to be used up here, not just the flag set.
+	state.once.Do(func() {})
+
 	if e.expired(ctx, state) {
 		return replaced
 	}
