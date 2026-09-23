@@ -448,3 +448,38 @@ func TestCache_AddUntil_StillObeysExpiration(t *testing.T) {
 	_, cached := cache.GetCached(timeCtx, "ticket")
 	require.False(t, cached, "the TTL from insertion ran out first")
 }
+
+// A key seeded by Add or AddUntil must be served by Get, not refilled. Before,
+// the inserted entry carried an unused sync.Once, so the first Get ran its fill
+// function and overwrote the value - which for AddUntil also discarded the
+// expiry the entry was added with.
+func TestCache_GetServesAnAddedValue(t *testing.T) {
+	ctx := testcontext.New(t)
+	defer ctx.Cleanup()
+
+	cache := NewOf[string](Options{Capacity: 4, EarlyExpiry: time.Minute})
+
+	cache.Add(ctx, "added", "by Add")
+	value, err := cache.Get(ctx, "added", func() (string, error) {
+		return "by Get", nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "by Add", value, "Get must not refill a seeded key")
+
+	cache.AddUntil(ctx, "ticket", "signed", time.Now().Add(time.Hour))
+	value, err = cache.Get(ctx, "ticket", func() (string, error) {
+		return "minted again", nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "signed", value)
+
+	// And once it is inside its margin, Get does fill it.
+	timeCtx, _ := time2.WithNewMachine(
+		ctx, time2.WithTimeAt(time.Now().Add(time.Hour)),
+	)
+	value, err = cache.Get(timeCtx, "ticket", func() (string, error) {
+		return "minted again", nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "minted again", value)
+}

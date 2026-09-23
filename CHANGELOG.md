@@ -137,6 +137,13 @@ now takes the key out of both halves and repeats until there is room, and
 replacing an existing key no longer evicts a different one to make space for
 it.
 
+**`lrucache.Get` overwrote a value that `Add` had just seeded.** An entry
+inserted by `Add` carried an unused `sync.Once`, so the first `Get` on that key
+ran its fill function and replaced the value - and for an `AddUntil` entry
+discarded the expiry it was added with, which is exactly the pattern the README
+now recommends. The insert spends the once and marks the value loaded, so `Get`
+serves it and fills only once the entry has really expired.
+
 **`lrucache.Add` panicked when caching was disabled.** A non-positive
 `Capacity` disables the cache, which `Get` has always honored by calling
 straight through, but `Add` read the back of an empty list and dereferenced
