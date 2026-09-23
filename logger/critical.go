@@ -2,7 +2,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -11,7 +10,12 @@ import (
 
 // LevelCritical is one severity above Error. It maps to syslog "critical" (2)
 // in Graylog. Use Critical or CriticalContext to emit at this level; they
-// automatically attach a full stack trace as the "stacktrace" attribute.
+// automatically attach the call stack as the "callstack" attribute.
+//
+// It is "callstack" and not "stacktrace" because this is where the process was
+// when it logged, not where a failure began; "stacktrace" is the error's own,
+// and both can appear on one record. See [Config.StacktraceLevel], which does
+// the same for every record at or above a level.
 const LevelCritical = slog.Level(slog.LevelError + 4)
 
 // Critical logs at LevelCritical on log and attaches an automatic stack trace.
@@ -40,37 +44,25 @@ func criticalInner(ctx context.Context, log *slog.Logger, msg string, args []any
 
 	r := slog.NewRecord(time.Now(), LevelCritical, msg, pcs[0])
 	r.Add(args...)
-	r.Add(slog.String("stacktrace", captureStack(3)))
+	// Captured here rather than in the handler: this is the caller's
+	// goroutine, and Handler.Handle leaves a record that already carries a
+	// callstack alone.
+	if frames := captureCallstack(pcs[0]); len(frames) > 0 {
+		r.Add(slog.String(callstackKey, strings.Join(frames, "\n")))
+	}
 
 	_ = log.Handler().Handle(ctx, r)
 }
 
-// Stack returns a formatted stack trace starting from the caller's frame.
-// Use it to manually attach a trace to any log level:
+// Stack returns the caller's call stack, one trimmed "function:line" per
+// frame joined by newlines - the same shape [Config.StacktraceLevel] and
+// [Critical] produce. Use it to attach one at any level:
 //
-//	slog.Error("unexpected state", "stacktrace", logger.Stack())
+//	slog.Error("unexpected state", "callstack", logger.Stack())
+//
+// The handler leaves a record that already carries a "callstack" alone, so
+// this wins over the automatic capture.
 func Stack() string {
-	return captureStack(2)
-}
-
-// captureStack returns a formatted stack trace, skipping skip frames above
-// captureStack itself. Frames from the Go runtime internals are omitted.
-func captureStack(skip int) string {
-	pcs := make([]uintptr, 64)
-	n := runtime.Callers(skip+1, pcs)
-	if n == 0 {
-		return ""
-	}
-	frames := runtime.CallersFrames(pcs[:n])
-	var sb strings.Builder
-	for {
-		f, more := frames.Next()
-		if !strings.HasPrefix(f.Function, "runtime.") {
-			fmt.Fprintf(&sb, "\n%s\n\t%s:%d", f.Function, f.File, f.Line)
-		}
-		if !more {
-			break
-		}
-	}
-	return sb.String()
+	// 1 skips Stack itself, leaving its caller innermost.
+	return strings.Join(captureCallstackSkip(1), "\n")
 }

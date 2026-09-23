@@ -20,6 +20,17 @@ type Options struct {
 	// is invalidated. A non-positive value means no expiration.
 	Expiration time.Duration
 
+	// EarlyExpiry is how long before its own expiry an entry added with
+	// AddUntil stops being served, so a caller never receives a value that is
+	// about to be rejected by whatever issued it - a download ticket, a
+	// presigned URL, an access token. The value is handed out only while
+	// now+EarlyExpiry is still before its expiry.
+	//
+	// It applies to AddUntil entries only. Expiration is measured from
+	// insertion, so subtracting a margin from it would just be a shorter
+	// Expiration.
+	EarlyExpiry time.Duration
+
 	// Capacity is how many objects to keep in memory.
 	Capacity int
 
@@ -29,8 +40,13 @@ type Options struct {
 
 // cacheState contains all of the state for a cached entry.
 type cacheState[T any] struct {
-	once   sync.Once
-	when   time.Time
+	once sync.Once
+	when time.Time
+
+	// expiresAt is the entry's own absolute expiry, from AddUntil. The zero
+	// time means it has none and only Options.Expiration applies.
+	expiresAt time.Time
+
 	order  *list.Element
 	value  T
 	loaded bool
@@ -104,7 +120,7 @@ func (e *ExpiringLRUOf[T]) Get(
 			}
 			e.data[key] = state
 
-		case e.opts.Expiration > 0 && time2.Since(ctx, state.when) > e.opts.Expiration:
+		case e.expired(ctx, state):
 			delete(e.data, key)
 			e.order.Remove(state.order)
 			e.mu.Unlock()
@@ -171,7 +187,8 @@ func (e *ExpiringLRUOf[T]) Delete(ctx context.Context, key string) {
 	e.order.Remove(state.order)
 }
 
-// Add adds a value to the cache.
+// Add adds a value to the cache. It expires Options.Expiration after this
+// call, like any other entry.
 //
 // replaced is true if the key already existed in the cache and was valid, hence
 // the value is replaced.
@@ -180,33 +197,77 @@ func (e *ExpiringLRUOf[T]) Add(
 	key string,
 	value T,
 ) (replaced bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	return e.add(ctx, key, value, time.Time{})
+}
 
-	state, evicted := e.peek(ctx, key)
-	if state == nil {
-		if !evicted && e.order.Len() >= e.opts.Capacity {
-			item := e.order.Back()
-			delete(e.data, item.Value.(string))
-		}
+// AddUntil adds a value that carries its own expiry, such as a signed URL or
+// an access token. The entry stops being served Options.EarlyExpiry before
+// expiresAt, so a caller is never handed one that is about to be refused, and
+// Options.Expiration still applies on top of it.
+//
+// An expiresAt already inside the margin is not stored: there would be nothing
+// left to serve. Any entry it displaced is still gone, because the new value
+// is the current one and it is dead. replaced reports that displacement.
+func (e *ExpiringLRUOf[T]) AddUntil(
+	ctx context.Context,
+	key string,
+	value T,
+	expiresAt time.Time,
+) (replaced bool) {
+	return e.add(ctx, key, value, expiresAt)
+}
 
-		e.data[key] = &cacheState[T]{
-			when:  time2.Now(ctx),
-			order: e.order.PushFront(key),
-			value: value,
-		}
-
+func (e *ExpiringLRUOf[T]) add(
+	ctx context.Context,
+	key string,
+	value T,
+	expiresAt time.Time,
+) (replaced bool) {
+	// A non-positive Capacity disables the cache, the way it does for Get.
+	// Before, this read the back of an empty list and panicked on it.
+	if e.opts.Capacity <= 0 {
 		return false
 	}
 
-	e.order.Remove(state.order)
-	e.data[key] = &cacheState[T]{
-		when:  time2.Now(ctx),
-		order: e.order.PushFront(key),
-		value: value,
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	state, _ := e.peek(ctx, key)
+	replaced = state != nil
+	if replaced {
+		// Taken out of both halves before the eviction loop counts, so
+		// replacing a key never evicts a different one to make room for it.
+		e.order.Remove(state.order)
+		delete(e.data, key)
 	}
 
-	return true
+	state = &cacheState[T]{
+		when:      time2.Now(ctx),
+		expiresAt: expiresAt,
+		value:     value,
+	}
+	if e.expired(ctx, state) {
+		return replaced
+	}
+
+	// Evict until there is room for one more. The map and the list are always
+	// left in step: dropping the map entry alone, as this did, left the list
+	// element behind, so the list grew without bound and every later eviction
+	// picked a key that was already gone - which let the map grow past
+	// Capacity as well.
+	for len(e.data) >= e.opts.Capacity {
+		back := e.order.Back()
+		if back == nil {
+			break
+		}
+		delete(e.data, back.Value.(string))
+		e.order.Remove(back)
+	}
+
+	state.order = e.order.PushFront(key)
+	e.data[key] = state
+
+	return replaced
 }
 
 // GetCached returns the value associated with key and true if it exists and
@@ -245,8 +306,7 @@ func (e *ExpiringLRUOf[T]) peek(
 		return nil, false
 	}
 
-	if e.opts.Expiration > 0 &&
-		time2.Since(ctx, state.when) > e.opts.Expiration {
+	if e.expired(ctx, state) {
 		e.order.Remove(state.order)
 		delete(e.data, key)
 
@@ -254,4 +314,23 @@ func (e *ExpiringLRUOf[T]) peek(
 	}
 
 	return state, false
+}
+
+// expired reports whether an entry may no longer be served: its TTL from
+// insertion has run out, or its own expiry is closer than Options.EarlyExpiry.
+//
+// Both Get and peek ask this, so an AddUntil entry is checked the same way
+// however it is read.
+func (e *ExpiringLRUOf[T]) expired(
+	ctx context.Context,
+	state *cacheState[T],
+) bool {
+	if e.opts.Expiration > 0 &&
+		time2.Since(ctx, state.when) > e.opts.Expiration {
+		return true
+	}
+	if state.expiresAt.IsZero() {
+		return false
+	}
+	return !time2.Now(ctx).Add(e.opts.EarlyExpiry).Before(state.expiresAt)
 }

@@ -211,3 +211,166 @@ func TestRecorderFailHook(t *testing.T) {
 	require.Equal(t, depin.CodeUnavailable, storageErr.Code)
 	require.Empty(t, rec.Uploads())
 }
+
+// A packed file is read back by byte range, so the range arguments are the
+// part a caller gets wrong, and they are refused before a round trip.
+func TestDownloadRangeRefusesImpossibleRanges(t *testing.T) {
+	t.Parallel()
+
+	storage, err := depin.New(
+		quiet(),
+		depin.Config{Provider: depin.ProviderLog},
+	)
+	require.NoError(t, err)
+
+	for name, tc := range map[string]struct {
+		offset, length int64
+	}{
+		"a negative offset": {offset: -1, length: 10},
+		"a zero length":     {offset: 0, length: 0},
+		"a negative length": {offset: 0, length: -10},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := storage.DownloadRange(
+				context.Background(), uuid.Must(), io.Discard,
+				tc.offset, tc.length,
+			)
+
+			var storageErr *depin.Error
+			require.ErrorAs(t, err, &storageErr)
+			require.Equal(t, depin.CodeInvalid, storageErr.Code)
+		})
+	}
+}
+
+// Like Download, a range from the log provider is not found rather than an
+// empty success.
+func TestLogProviderDownloadRangeIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	storage, err := depin.New(
+		quiet(),
+		depin.Config{Provider: depin.ProviderLog},
+	)
+	require.NoError(t, err)
+
+	err = storage.DownloadRange(
+		context.Background(), uuid.Must(), io.Discard, 0, 16,
+	)
+
+	var storageErr *depin.Error
+	require.ErrorAs(t, err, &storageErr)
+	require.Equal(t, depin.CodeNotFound, storageErr.Code)
+	require.False(t, storageErr.Temporary)
+}
+
+// The log provider answers a local ticket rather than reporting a missing CA
+// key, because its caller's fallback is a coordinator it also does not have.
+func TestLogProviderMintsALocalTicket(t *testing.T) {
+	t.Parallel()
+
+	storage, err := depin.New(
+		quiet(),
+		depin.Config{Provider: depin.ProviderLog},
+	)
+	require.NoError(t, err)
+
+	expiry := time.Now().Add(time.Hour)
+	ticket, err := storage.CreateLocalTicket(uuid.Must(), expiry)
+	require.NoError(t, err)
+	require.NotEmpty(t, ticket.Token)
+	require.Equal(t, expiry.Truncate(time.Second), ticket.ExpiresAt)
+
+	_, err = storage.CreateLocalTicket(uuid.Nil, expiry)
+	var storageErr *depin.Error
+	require.ErrorAs(t, err, &storageErr)
+	require.Equal(t, depin.CodeInvalid, storageErr.Code)
+}
+
+// A service reads its deposit address at startup, so the log provider answers
+// one rather than failing the boot.
+func TestLogProviderAccountIsAStandIn(t *testing.T) {
+	t.Parallel()
+
+	storage, err := depin.New(
+		quiet(),
+		depin.Config{Provider: depin.ProviderLog},
+	)
+	require.NoError(t, err)
+
+	account, err := storage.Account(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "0x0000000000000000000000000000000000000000",
+		account.Address)
+	require.Equal(t, "log", account.Status)
+}
+
+// The recorder serves the bytes a range asked for, so a test of a packed file
+// asserts the offsets its production code computed.
+func TestRecorderServesRanges(t *testing.T) {
+	t.Parallel()
+
+	fileID := uuid.Must()
+	rec := &depintest.Recorder{
+		Files: map[uuid.UUID][]byte{fileID: []byte("0123456789")},
+	}
+	ctx := context.Background()
+
+	var buf bytes.Buffer
+	require.NoError(t, rec.DownloadRange(ctx, fileID, &buf, 2, 3))
+	require.Equal(t, "234", buf.String())
+
+	// A range running past the end is cut short, as a real file size does.
+	buf.Reset()
+	require.NoError(t, rec.DownloadRange(ctx, fileID, &buf, 8, 100))
+	require.Equal(t, "89", buf.String())
+
+	// And one starting past the end serves nothing.
+	buf.Reset()
+	require.NoError(t, rec.DownloadRange(ctx, fileID, &buf, 50, 10))
+	require.Empty(t, buf.String())
+
+	err := rec.DownloadRange(ctx, uuid.Must(), &buf, 0, 10)
+	var storageErr *depin.Error
+	require.ErrorAs(t, err, &storageErr)
+	require.Equal(t, depin.CodeNotFound, storageErr.Code)
+
+	require.Equal(t, []depintest.Range{
+		{FileID: fileID, Offset: 2, Length: 3},
+		{FileID: fileID, Offset: 8, Length: 100},
+		{FileID: fileID, Offset: 50, Length: 10},
+	}, rec.Ranges()[:3],
+		"the ranges a caller asked for are what a test asserts on")
+}
+
+// Local tickets are recorded apart from coordinator ones, because which path a
+// caller took is the thing worth asserting.
+func TestRecorderRecordsLocalTicketsAndAccount(t *testing.T) {
+	t.Parallel()
+
+	fileID := uuid.Must()
+	rec := &depintest.Recorder{
+		AccountRecord: depin.Account{Address: "0xabc", Status: "active"},
+	}
+
+	ticket, err := rec.CreateLocalTicket(fileID, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Contains(t, ticket.Token, fileID.String())
+
+	require.Equal(t, []uuid.UUID{fileID}, rec.LocallyTicketed())
+	require.Empty(t, rec.Ticketed(), "a local ticket is not a coordinator one")
+
+	account, err := rec.Account(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "0xabc", account.Address)
+
+	rec.Fail = func(op string) error {
+		return &depin.Error{Code: depin.CodeAuth, Op: op}
+	}
+	_, err = rec.Account(context.Background())
+	var storageErr *depin.Error
+	require.ErrorAs(t, err, &storageErr)
+	require.Equal(t, depin.CodeAuth, storageErr.Code)
+}

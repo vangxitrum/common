@@ -4,6 +4,162 @@
 
 ### Added
 
+**`depin.Storage` gains `DownloadRange`, `CreateLocalTicket` and `Account`.**
+`DownloadRange(ctx, fileID, w, offset, length)` writes the plaintext bytes
+`[offset, offset+length)`, so a caller that packs thumbnail sizes, HLS
+segments, captions and chapters into one uploaded file reads one back without
+fetching the whole pack. A negative offset or a length of zero or less is
+`invalid` here rather than an `OutOfRange` a round trip later; a whole file
+stays `Download`'s job.
+
+`CreateLocalTicket(fileID, expiresAt)` signs a ticket with the identity's own
+CA key and makes no coordinator call, which is what a playlist minting one link
+per segment needs - an RPC per link is what pushed playlist loading past client
+timeouts. It takes no context because nothing about it blocks. An identity
+directory with no `ca.cert`/`ca.key` pair reports `auth`, a distinct code so
+the fallback to `CreateTicket` is a check on `Code` and not a match on a
+message. `Ticket.ExpiresAt` comes back truncated to the second, because the
+token carries whole Unix seconds and that is what the coordinator enforces.
+
+`Account(ctx)` returns this package's own `Account` - `ID`, `Address` (the
+deposit address, EVM-style hex), `Email`, `Status`, `CreatedAt` - rather than
+the SDK's protobuf record, whose id and address types are declared in
+`go-sdk/internal/vo` and so cannot be named outside that module. It is a short
+idempotent RPC, so it retries with the other coordinator calls. The
+coordinator's `NotFound` for an identity it has no record of means an identity
+that was never registered, which every caller has to treat as an auth failure,
+so this one call reports it as `auth`.
+
+`depintest.Recorder` serves ranges from `Files`, clipped to the recorded bytes,
+and records them in `Ranges()`; local tickets are recorded apart from
+coordinator ones in `LocallyTicketed()`, and `AccountRecord` is what `Account`
+returns. The `log` provider reports a range as `not_found` like its `Download`,
+mints the same stand-in token for a local ticket as for a coordinator one, and
+answers `Account` with a stand-in whose address is the zero address, so a
+service that reads its deposit address at startup still boots with no identity
+and no coordinator.
+
+**The go-sdk pin moves to `ef2115da4a3b`**, which is where
+`DownloadFileRange`, `CreateDownloadTicketLocal` and `GetAccount` live.
+
+**`lrucache.Options.EarlyExpiry` and `AddUntil`: a value that carries its own
+expiry.** A signed URL, a download ticket or an access token expires on its own
+schedule, whatever the cache's TTL says, and handing one out a second before it
+dies means the caller gets it refused. `AddUntil(ctx, key, value, expiresAt)`
+stores the value's own expiry and `EarlyExpiry` is how long before it the cache
+stops serving the entry. The margin is exclusive, so at exactly `EarlyExpiry`
+before the expiry the entry is already gone; a value that is already inside its
+margin is not stored, and it still invalidates whatever it replaced, because it
+is the current value and it is dead. `Expiration` still applies on top,
+whichever runs out first, and `Get` reads the same predicate as `GetCached`, so
+neither path serves an entry the other would refuse.
+
+`EarlyExpiry` does nothing for an `Add` entry: `Expiration` is measured from
+insertion, so subtracting a margin from it would only be a shorter
+`Expiration`.
+
+**`postgres.Config.LogQueries` and `SlowQuery`: a query log.** `db.log-queries`
+logs every statement at debug; `db.slow-query` logs anything at or over a
+duration at warn. A failure is an error whatever the threshold says, and a slow
+statement is a warning rather than a warning and a debug line. Both are off by
+default, so a pool nobody configured logs nothing. The tracer is now installed
+for logging as well as for metrics, so `metrics: false` no longer turns the
+query log off with it.
+
+**Bind parameters are never logged.** pgx sends them separately from the
+statement, so what is logged is the parameterized form - `WHERE email = $1` -
+and the value that would identify a person stays out of the log.
+`TraceQueryStart` drops `data.Args` rather than carrying them to the logger.
+The statement is collapsed onto one line and capped at 2048 characters with a
+`...[truncated]` marker.
+
+**A db record is mapped to `db.*` in Elasticsearch.** A record carrying
+`group=db` has its `statement`, `operation`, `rows`, pool `name` and `duration`
+filed as `db.statement`, `db.operation`, `db.rows_affected`,
+`db.instance.name` and `event.duration`, the way an api-group record is already
+split into `http.*` and `url.*`. Left in `log.extra` they would be stored but
+not mapped, so "every UPDATE over 200ms" would not be a query anyone could
+write - which is the reason the statement is logged at all. The names follow
+OpenTelemetry's db semantic conventions; ECS has no database fieldset. **The
+matching `aioz-monitor` index template gains `db.*` and
+`log.origin.stack_trace`; the two changes only work as a pair.**
+
+**`logger.Config.StacktraceLevel` / `log.stacktrace-level`: the call stack of
+the log statement.** Every record at or above the configured level carries
+`callstack` - how the goroutine reached the log statement - the way zap's
+`AddStacktrace` does. Blank, the default, disables it and costs nothing.
+
+This is not `stacktrace`. That one says where a failure *began*, comes from the
+error, and only exists when something in its chain is a zeebo/errs error;
+`callstack` says how the process got to the line that reported it, and exists
+for any record. The two answer different questions, so neither displaces the
+other: both can appear on one record, each with its own console block, and
+Elasticsearch files `stacktrace` under ECS `error.stack_trace` and `callstack`
+under `log.origin.stack_trace`, beside the `log.origin.file.name` that
+`AddSource` produces. A record that already carries a `callstack` keeps it.
+
+The capture happens in the outermost handler, the last point still running on
+the caller's goroutine - `asyncHandler` hands the record to a consumer whose
+stack is its own loop. It is anchored on the record's own program counter, so
+slog's dispatch and this package's handlers are dropped without encoding how
+deep either is.
+
+**`errors.Unwrap` on `depin`, `slack`, `s3client` and `mail` errors.** Each
+`*Error` gains an `Unwrap`, so `errors.Is` reaches a `context.Canceled`, an
+`io` error or the SDK's typed error through a failure, instead of finding it
+flattened into the message string. The `*Error` is still what a caller matches
+with `errors.As`.
+
+### Changed
+
+**`depin.Storage` is three methods wider.** Anything outside this repo
+implementing it needs `DownloadRange`, `CreateLocalTicket` and `Account`;
+`depintest.Recorder` and the `log` provider already have them.
+
+**`Critical` attaches its stack as `callstack`, not `stacktrace`,** and
+`logger.Stack()` returns the same trimmed `function:line` shape as every other
+stack this package prints instead of its own `function\n\tfile:line` one.
+Before, a `Critical` about an error overwrote that error's `stacktrace` with
+its own call stack, so the failure's origin was lost exactly where it was most
+wanted, and a `Critical` with no error filed a call stack as
+`error.stack_trace`. **Anything querying `error.stack_trace` for Critical lines
+should move to `log.origin.stack_trace`.**
+
+### Fixed
+
+**`lrucache.Add` grew the cache without bound and broke `Capacity`.** When it
+evicted, it deleted the map entry but left the list element in place, so the
+order list grew for every insert and every later eviction picked a key that was
+already gone - which meant nothing was actually evicted and the map grew too.
+A cache with `Capacity: 2` held 99 entries after 99 adds; `Get`'s own eviction
+path was always correct, so only the `Add`/`GetCached` pair leaked. Eviction
+now takes the key out of both halves and repeats until there is room, and
+replacing an existing key no longer evicts a different one to make space for
+it.
+
+**`lrucache.Add` panicked when caching was disabled.** A non-positive
+`Capacity` disables the cache, which `Get` has always honored by calling
+straight through, but `Add` read the back of an empty list and dereferenced
+nil. It now stores nothing and reports `replaced` as false.
+
+**`postgres`'s bind-parameter leak test failed on the clock.** It asserted the
+formatted records did not contain `42`, the non-string parameter, and two
+digits turn up inside a measured duration (`1.000421ms`) or a timestamp
+(`17:58:00.260342962`) often enough to fail a clean run. The parameter is now
+long and distinctive and the assertion reads the message and attributes
+without the wall-clock time.
+
+**The call site reaches the sinks, so `log.origin.file.name` is no longer
+always absent.** With `AddSource`, the console handler computed the caller's
+`file:line` and passed it to the console writer alone; the attribute map handed
+to the file, Graylog and Elasticsearch sinks never got it, so the
+Elasticsearch sink's `case "source":` branch was dead in production and
+`logger/README.md`'s promise of `log.origin.file.name` was not kept. A record
+that logs its own `source` - the source of a payment, a feed - keeps it.
+
+
+### Added
+
 **`logger/logtest`: loggers for tests.** `New(t)` writes every record into the
 test's own log, so a failing test prints what the code under test logged and a
 passing one prints nothing. `NewRecorder` keeps every record - message, level

@@ -79,11 +79,29 @@ type Ticket struct {
 	ExpiresAt time.Time
 }
 
+// Account is the coordinator's record of the identity this client holds.
+//
+// It is this package's own struct rather than the SDK's protobuf message,
+// whose id and address fields are declared in go-sdk/internal/vo and so cannot
+// be named outside that module.
+type Account struct {
+	// ID is the account's identifier at the coordinator.
+	ID uuid.UUID
+
+	// Address is the deposit address, an EVM-style hex string (0x...). It is
+	// empty when the coordinator holds none.
+	Address string
+
+	Email     string
+	Status    string
+	CreatedAt time.Time
+}
+
 // Storage stores and fetches files.
 //
-// Download and DownloadByTicket write to w as the data arrives rather than
-// returning a reader, because that is the shape the SDK offers. A caller that
-// needs a reader bridges it with io.Pipe.
+// Download, DownloadRange and DownloadByTicket write to w as the data arrives
+// rather than returning a reader, because that is the shape the SDK offers. A
+// caller that needs a reader bridges it with io.Pipe.
 //
 // Close releases the p2p host and the connection pool. A Storage is meant to
 // live as long as the process and be registered with the lifecycle package,
@@ -91,12 +109,42 @@ type Ticket struct {
 type Storage interface {
 	Upload(ctx context.Context, r io.Reader, p UploadParams) (Receipt, error)
 	Download(ctx context.Context, fileID uuid.UUID, w io.Writer) error
+
+	// DownloadRange writes the plaintext bytes [offset, offset+length) to w.
+	// It exists because a caller that packs several small objects into one
+	// uploaded file - thumbnail sizes, HLS segments, captions - reads them
+	// back by byte range, and Download would fetch the whole pack each time.
+	//
+	// offset must not be negative and length must be greater than zero; a
+	// whole file is Download's job, not a length that means "the rest".
+	DownloadRange(
+		ctx context.Context,
+		fileID uuid.UUID,
+		w io.Writer,
+		offset, length int64,
+	) error
+
 	DownloadByTicket(ctx context.Context, ticket string, w io.Writer) error
 	CreateTicket(
 		ctx context.Context,
 		fileID uuid.UUID,
 		expiresAt time.Time,
 	) (Ticket, error)
+
+	// CreateLocalTicket signs a ticket with the identity's own CA key, with no
+	// coordinator round trip, so a caller minting one link per playlist
+	// segment is not making hundreds of RPCs. It takes no context for that
+	// reason: nothing here blocks.
+	//
+	// It fails with [CodeAuth] when the identity directory holds no CA key
+	// pair, which is the signal to fall back to [Storage.CreateTicket]. A
+	// caller checks the code, never the message.
+	CreateLocalTicket(fileID uuid.UUID, expiresAt time.Time) (Ticket, error)
+
+	// Account returns the coordinator's record of this client's identity. An
+	// identity the coordinator does not know is [CodeAuth].
+	Account(ctx context.Context) (Account, error)
+
 	DeleteFile(ctx context.Context, fileID uuid.UUID) error
 	ListPlacements(ctx context.Context) ([]Placement, error)
 	CreateContract(
@@ -143,7 +191,17 @@ type Error struct {
 	Temporary bool
 
 	detail string
+
+	// cause is the error underneath, when there was one: the SDK's error, or
+	// whatever a reader or the network reported. Unwrap returns it, so
+	// errors.Is and errors.As reach it.
+	cause error
 }
+
+// Unwrap returns the error underneath, or nil when the failure originated
+// here. It is what lets errors.Is find a context.Canceled or an io error
+// through a depin failure.
+func (e *Error) Unwrap() error { return e.cause }
 
 func (e *Error) Error() string {
 	msg := "depin: " + e.Op + ": " + e.Code

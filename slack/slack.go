@@ -120,7 +120,15 @@ type Error struct {
 	RetryAfter time.Duration
 
 	detail string
+
+	// cause is the error underneath, when there was one. Unwrap returns it.
+	cause error
 }
+
+// Unwrap returns the error underneath, or nil when the failure originated
+// here. It is what lets errors.Is and errors.As reach a transport error through the failure,
+// instead of finding it flattened into the message string.
+func (e *Error) Unwrap() error { return e.cause }
 
 func (e *Error) Error() string {
 	msg := "slack: " + e.Code

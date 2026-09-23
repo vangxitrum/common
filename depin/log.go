@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/random"
@@ -38,7 +39,8 @@ func (s *logStorage) Upload(
 	written, err := io.Copy(io.Discard, r)
 	if err != nil {
 		return Receipt{}, &Error{
-			Code: CodeTransport, Op: "upload", detail: err.Error(),
+			Code: CodeTransport, Op: "upload",
+			detail: err.Error(), cause: err,
 		}
 	}
 
@@ -60,6 +62,32 @@ func (s *logStorage) Download(
 	s.log.InfoContext(ctx, "file not fetched (log provider)", "file_id", fileID)
 	return &Error{
 		Code: CodeNotFound, Op: "download",
+		detail: "the log provider stores nothing",
+	}
+}
+
+func (s *logStorage) DownloadRange(
+	ctx context.Context,
+	fileID uuid.UUID,
+	_ io.Writer,
+	offset, length int64,
+) error {
+	// The arguments are validated first, so a caller's off-by-one is caught in
+	// development rather than only against the real provider.
+	if fileID.IsNil() {
+		return invalid("download range", "no file id")
+	}
+	if offset < 0 {
+		return invalid("download range", "offset is negative")
+	}
+	if length <= 0 {
+		return invalid("download range", "length must be greater than zero")
+	}
+
+	s.log.InfoContext(ctx, "range not fetched (log provider)",
+		"file_id", fileID, "offset", offset, "length", length)
+	return &Error{
+		Code: CodeNotFound, Op: "download range",
 		detail: "the log provider stores nothing",
 	}
 }
@@ -90,6 +118,36 @@ func (s *logStorage) CreateTicket(
 	return Ticket{
 		Token:     "log-" + random.String(16, random.Base62),
 		ExpiresAt: expiresAt,
+	}, nil
+}
+
+// CreateLocalTicket mints the same stand-in token as CreateTicket. The log
+// provider has no identity directory and so no CA key, but reporting that as
+// [CodeAuth] would send every caller down its coordinator fallback, which the
+// log provider cannot serve either.
+func (s *logStorage) CreateLocalTicket(
+	fileID uuid.UUID,
+	expiresAt time.Time,
+) (Ticket, error) {
+	if fileID.IsNil() {
+		return Ticket{}, invalid("create local ticket", "no file id")
+	}
+
+	s.log.Info("local ticket not signed (log provider)", "file_id", fileID)
+	return Ticket{
+		Token:     "log-" + random.String(16, random.Base62),
+		ExpiresAt: expiresAt.Truncate(time.Second),
+	}, nil
+}
+
+// Account returns a stand-in record, so a service that reads its deposit
+// address at startup can run with no identity and no coordinator. The address
+// is the zero address, which is not a wallet anyone can pay.
+func (s *logStorage) Account(ctx context.Context) (Account, error) {
+	s.log.InfoContext(ctx, "account not fetched (log provider)")
+	return Account{
+		Address: "0x" + strings.Repeat("0", 40),
+		Status:  "log",
 	}, nil
 }
 
