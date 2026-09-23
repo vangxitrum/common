@@ -74,9 +74,6 @@ stack that starts higher up. It is found by type, not with `errs.Tags`, which
 reports nothing for `errs.Errorf` and `errs.Wrap`: they capture a stack under
 an empty tag.
 
-For logging, [`logger.ErrorStack`](../logger/README.md) trims these frames and
-the handler prints them under the line.
-
 ## API
 
 ```go

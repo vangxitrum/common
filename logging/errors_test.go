@@ -17,8 +17,8 @@ import (
 )
 
 // End to end through the configured logger, read back from its file sink: an
-// errs error is written as its message plus a trimmed stack, not as {}.
-func TestTheServiceLoggerLogsAnErrorAsItsMessageAndStack(t *testing.T) {
+// errs error is written as its message, not as {}, and without its stack.
+func TestTheServiceLoggerLogsAnErrorAsItsMessage(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "service.log")
@@ -54,10 +54,5 @@ func TestTheServiceLoggerLogsAnErrorAsItsMessageAndStack(t *testing.T) {
 		line["err"],
 	)
 	require.Equal(t, "user:delete-expired-refresh-tokens", line["chore"])
-	require.Contains(
-		t,
-		line["stacktrace"],
-		"aioz-common/logging_test.TestTheServiceLoggerLogsAnErrorAsItsMessageAndStack:",
-	)
-	require.NotContains(t, line["stacktrace"], "gitlab.internal/")
+	require.NotContains(t, line, "stacktrace")
 }

@@ -12,10 +12,8 @@ import (
 // in Graylog. Use Critical or CriticalContext to emit at this level; they
 // automatically attach the call stack as the "callstack" attribute.
 //
-// It is "callstack" and not "stacktrace" because this is where the process was
-// when it logged, not where a failure began; "stacktrace" is the error's own,
-// and both can appear on one record. See [Config.StacktraceLevel], which does
-// the same for every record at or above a level.
+// See [Config.StacktraceLevel], which does the same for every record at or
+// above a level.
 const LevelCritical = slog.Level(slog.LevelError + 4)
 
 // Critical logs at LevelCritical on log and attaches an automatic stack trace.

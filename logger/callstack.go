@@ -10,11 +10,9 @@ import (
 // callstackKey is the attribute holding the call stack of the log statement,
 // which the console prints as a block below the line.
 //
-// It is deliberately not [stackKey]. That one is where a failure *began*,
-// taken from the error, and the Elasticsearch sink files it under ECS
-// error.stack_trace. This one is how the goroutine *reached* the log
-// statement, which is not a property of any error, and the two answer
-// different questions often enough that neither may displace the other.
+// It is how the goroutine *reached* the log statement, which is a property of
+// the log event and not of any error, so the Elasticsearch sink files it under
+// ECS log.origin.stack_trace.
 const callstackKey = "callstack"
 
 // maxCallstackDepth caps a captured call stack. Past this the frames are the
@@ -111,4 +109,54 @@ func hasAttr(r slog.Record, key string) bool {
 		return true
 	})
 	return found
+}
+
+// plumbing are the frames that say how a goroutine was started rather than
+// what it was doing. lifecyclePkg is matched anywhere in a frame, since the host and
+// owner in front of it vary by checkout.
+var plumbing = []string{"runtime.", "runtime/", "golang.org/x/sync/errgroup."}
+
+const lifecyclePkg = "/aioz-common/lifecycle."
+
+// formatBlock renders frames as the block the console prints under a line:
+// "\n  <label>:" and then each frame on its own indented line. It returns ""
+// for no frames.
+func formatBlock(label string, frames []string) string {
+	if len(frames) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n  ")
+	sb.WriteString(label)
+	sb.WriteString(":")
+	for _, frame := range frames {
+		sb.WriteString("\n    ")
+		sb.WriteString(frame)
+	}
+	return sb.String()
+}
+
+func isPlumbing(frame string) bool {
+	for _, prefix := range plumbing {
+		if strings.HasPrefix(frame, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(frame, lifecyclePkg)
+}
+
+// trimFrame drops the host and owner from a frame's import path:
+// "10.0.0.50/tuan.quang.tran/vms-v2/internal/app/user.(*Service).Delete:254"
+// becomes "vms-v2/internal/app/user.(*Service).Delete:254". A module path is
+// recognized by a dot in its first element, as a host has; "main." and
+// standard library frames are left alone.
+func trimFrame(frame string) string {
+	host, rest, ok := strings.Cut(frame, "/")
+	if !ok || !strings.Contains(host, ".") {
+		return frame
+	}
+	if _, rest, ok = strings.Cut(rest, "/"); !ok {
+		return frame
+	}
+	return rest
 }

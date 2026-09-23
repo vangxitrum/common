@@ -130,9 +130,9 @@ func TestARecordsOwnCallstackIsNotOverwritten(t *testing.T) {
 	require.Equal(t, "mine", got[0][callstackKey])
 }
 
-func TestTheCallStackDoesNotDisplaceAnErrorStack(t *testing.T) {
-	// The two answer different questions and must both survive: stacktrace is
-	// where the failure began, callstack is how we got to the log statement.
+func TestTheCallStackIsTheOnlyStackOnAnErrorRecord(t *testing.T) {
+	// The error's own stack is not logged: callstack, how we got to the log
+	// statement, is the one stack a record carries.
 	log, buf := jsonLogger(t, slog.LevelError)
 
 	log.Error("it broke", "err", taggedError())
@@ -140,9 +140,9 @@ func TestTheCallStackDoesNotDisplaceAnErrorStack(t *testing.T) {
 	require.NoError(t, closeAndFlush(t, log))
 	got := lines(t, buf)
 	require.Len(t, got, 1)
-	require.NotEmpty(t, got[0][stackKey], "the error's own stack survives")
+	require.Equal(t, "callstacktest: it broke down there", got[0]["err"])
+	require.NotContains(t, got[0], "stacktrace")
 	require.NotEmpty(t, callstackOf(t, got[0]))
-	require.NotEqual(t, got[0][stackKey], got[0][callstackKey])
 }
 
 func TestTheCallStackIsPrintedAsABlockOnTheConsole(t *testing.T) {
@@ -172,4 +172,45 @@ func closeAndFlush(t *testing.T, log *slog.Logger) error {
 	h, ok := log.Handler().(*Handler)
 	require.True(t, ok)
 	return h.Shutdown(context.Background())
+}
+
+func TestTrimFrame(t *testing.T) {
+	t.Parallel()
+
+	for frame, want := range map[string]string{
+		"10.0.0.50/tuan.quang.tran/vms-v2/internal/app/user.(*Service).DeleteExpiredRefreshTokens:254": "vms-v2/internal/app/user.(*Service).DeleteExpiredRefreshTokens:254",
+		"gitlab.internal/tuan.quang.tran/aioz-common/cycle.(*Cycle).Run:84":                            "aioz-common/cycle.(*Cycle).Run:84",
+		"main.(*Service).Delete:30":     "main.(*Service).Delete:30",
+		"net/http.(*conn).serve:2092":   "net/http.(*conn).serve:2092",
+		"example.com/pkg.Func:1":        "example.com/pkg.Func:1",
+		"gopkg.in/yaml.v3.Unmarshal:10": "gopkg.in/yaml.v3.Unmarshal:10",
+	} {
+		require.Equal(t, want, trimFrame(frame), frame)
+	}
+}
+
+func TestIsPlumbing(t *testing.T) {
+	t.Parallel()
+
+	for frame, want := range map[string]bool{
+		"runtime.goexit:1700":                             true,
+		"runtime/pprof.Do:51":                             true,
+		"golang.org/x/sync/errgroup.(*Group).Go.func1:93": true,
+		"gitlab.internal/tuan.quang.tran/aioz-common/lifecycle.(*Group).Run.func1:110": true,
+		"gitlab.internal/tuan.quang.tran/aioz-common/cycle.(*Cycle).Run:84":            false,
+		"10.0.0.50/tuan.quang.tran/vms-v2/internal/utils/chore.(*Chore).Run:76":        false,
+	} {
+		require.Equal(t, want, isPlumbing(frame), frame)
+	}
+}
+
+func TestFormatBlock(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, formatBlock("callstack", nil))
+	require.Equal(
+		t,
+		"\n  callstack:\n    a:1\n    b:2",
+		formatBlock("callstack", []string{"a:1", "b:2"}),
+	)
 }
