@@ -3,7 +3,11 @@ package logging_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,4 +277,81 @@ func TestNewWithNoStacktraceLevelAttachesNothing(t *testing.T) {
 	require.NoError(t, shutdown(handler))
 
 	require.NotContains(t, buf.String(), "callstack")
+}
+
+func TestValidateRejectsAnUnknownElasticsearchEnv(t *testing.T) {
+	t.Parallel()
+
+	for _, env := range []string{"prod", "tue-staging", "Production", " staging"} {
+		cfg := defaults()
+		cfg.Elasticsearch.Enabled = true
+		cfg.Elasticsearch.URL = "https://es.example"
+		cfg.Elasticsearch.Env = env
+
+		require.ErrorContains(t, cfg.Validate(), "log.elasticsearch.env", env)
+	}
+}
+
+func TestValidateAcceptsTheKnownElasticsearchEnvs(t *testing.T) {
+	t.Parallel()
+
+	for _, env := range append(logging.Environments(), "") {
+		cfg := defaults()
+		cfg.Elasticsearch.Enabled = true
+		cfg.Elasticsearch.URL = "https://es.example"
+		cfg.Elasticsearch.Env = env
+
+		require.NoError(t, cfg.Validate(), env)
+	}
+}
+
+// TestNewStampsTheEnvOnShippedDocuments drives the whole path a service uses:
+// the config section, logging.New, a log call, and the bulk request a real
+// Elasticsearch would receive.
+func TestNewStampsTheEnvOnShippedDocuments(t *testing.T) {
+	t.Parallel()
+
+	docs := make(chan map[string]any, 4)
+	es := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		lines := strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+		for i := 1; i < len(lines); i += 2 {
+			var doc map[string]any
+			if json.Unmarshal([]byte(lines[i]), &doc) == nil {
+				docs <- doc
+			}
+		}
+	}))
+	t.Cleanup(es.Close)
+
+	cfg := defaults()
+	cfg.Elasticsearch = logging.ElasticsearchConfig{
+		Enabled:       true,
+		URL:           es.URL,
+		DataStream:    "logs-aioz-test",
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+		Timeout:       5 * time.Second,
+		Service:       "svc",
+		Env:           "production",
+	}
+	require.NoError(t, cfg.Validate())
+
+	handler, _, err := logging.New(cfg, logging.WithOutput(io.Discard))
+	require.NoError(t, err)
+	slog.New(handler).Info("hello")
+	require.NoError(t, shutdown(handler))
+
+	select {
+	case doc := <-docs:
+		service := doc["service"].(map[string]any)
+		require.Equal(t, "production", service["environment"])
+		require.Equal(t, "svc", service["name"])
+	case <-time.After(5 * time.Second):
+		t.Fatal("no document reached Elasticsearch")
+	}
 }

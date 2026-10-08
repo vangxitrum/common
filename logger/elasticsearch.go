@@ -77,6 +77,12 @@ type ElasticsearchConfig struct {
 	Service string
 	Role    string
 	Host    string
+
+	// Env is stamped on every document as service.environment: which
+	// deployment - staging or production - wrote it. Two deployments of one
+	// service write to the same data stream, so without it their records are
+	// indistinguishable. Blank writes no field.
+	Env string
 }
 
 // DefaultIndexFields are the attributes indexed when IndexFields is empty.
@@ -91,6 +97,7 @@ var DefaultIndexFields = []string{"service", "role"}
 var ecsPaths = map[string][2]string{
 	"service": {"service", "name"},
 	"role":    {"service", "role"},
+	"env":     {"service", "environment"},
 	"host":    {"host", "name"},
 }
 
@@ -302,6 +309,9 @@ func (s *elasticsearchSink) document(level slog.Level, t time.Time, msg string, 
 	}
 	if s.cfg.Host != "" {
 		setNestedValue(doc, "host", "name", s.cfg.Host)
+	}
+	if s.cfg.Env != "" {
+		setNestedValue(doc, "service", "environment", s.cfg.Env)
 	}
 
 	labels := make(map[string]any, len(attrs))

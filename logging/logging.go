@@ -73,6 +73,7 @@ type ElasticsearchConfig struct {
 	IndexFields   []string      `help:"attributes to index for search; every other attribute still ships, under log.extra, unmapped; blank indexes service and role" default:""`
 	Service       string        `help:"service.name on every document; blank uses the hostname" default:""`
 	Role          string        `help:"service.role on every document: what this process does, such as api or worker" default:""`
+	Env           string        `help:"service.environment on every document: staging or production; blank writes no field" default:""`
 }
 
 // SamplingConfig configures per-level count sampling.
@@ -99,6 +100,20 @@ var levels = map[string]slog.Level{
 var formats = map[string]logger.Format{
 	"text": logger.FormatText,
 	"json": logger.FormatJSON,
+}
+
+// environments are the accepted values of log.elasticsearch.env. Blank is
+// accepted too and writes no field, which is what a service that has not set
+// it yet has always done.
+var environments = map[string]struct{}{
+	"":           {},
+	"staging":    {},
+	"production": {},
+}
+
+// Environments returns the values log.elasticsearch.env accepts besides blank.
+func Environments() []string {
+	return []string{"staging", "production"}
 }
 
 // Levels returns the level names to suggest, in increasing severity. The
@@ -228,6 +243,14 @@ func (c Config) Validate() error {
 		}
 		if strings.HasSuffix(strings.TrimSuffix(c.Elasticsearch.URL, "/"), "/_bulk") {
 			return Error.Errorf("log.elasticsearch.url is the base URL; the sink appends /_bulk itself")
+		}
+		if _, ok := environments[c.Elasticsearch.Env]; !ok {
+			// Dashboards and saved searches select an environment by exact
+			// match, so "prod" or "tue-staging" would ship records that no
+			// filter can find. The deployment's name belongs in the host or
+			// service, not here.
+			return Error.Errorf("log.elasticsearch.env must be %s, or blank; got %q",
+				strings.Join(Environments(), " or "), c.Elasticsearch.Env)
 		}
 	}
 	if c.File.Enabled {
@@ -359,6 +382,7 @@ func New(cfg Config, opts ...Option) (*logger.Handler, *slog.LevelVar, error) {
 			IndexFields:   cfg.Elasticsearch.IndexFields,
 			Service:       esService,
 			Role:          cfg.Elasticsearch.Role,
+			Env:           cfg.Elasticsearch.Env,
 			Host:          hostname,
 		}
 	}
