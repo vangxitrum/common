@@ -55,6 +55,12 @@ go get gitlab.internal/tuan.quang.tran/aioz-common
 | [`aioz-common/stats/testcontext`](stats/testcontext/README.md) | `testcontext` | Test helper: a context canceled when the test ends, with `Go`/`Wait`/`Cleanup` for tracking background goroutines and reporting their errors against the test. |
 | [`aioz-common/stats/version`](stats/version/README.md) | `version` | **Deprecated.** Aliases forwarding to [`version`](version/README.md), which is where the package now lives. |
 
+One command ships alongside the packages:
+
+| Command | What it does |
+| --- | --- |
+| [`cmd/aiozkey`](cmd/aiozkey/README.md) | Makes the keys and secrets the packages load: a jwt key pair laid out for `jwt.LoadKeyRing`, an HMAC secret as long as `jwt.NewHMACSigner` requires. Built for Linux and macOS by an opt-in pipeline and downloadable from the team file server. |
+
 Each component keeps its own README with the full API reference and examples -
 follow the links above. [`docs/ADOPTING.md`](docs/ADOPTING.md) covers what a
 service wires up on day one and how the packages fit together;
@@ -66,6 +72,8 @@ service wires up on day one and how the packages fit together;
 aioz-common/
 ├── apierr/           # HTTP error envelope
 ├── base58/           # base58 and base58check
+├── cmd/
+│   └── aiozkey/      # key and secret generator
 ├── config/           # configuration
 ├── context2/         # the context shapes stdlib lacks
 ├── currency/         # exact money and rates

@@ -139,7 +139,30 @@ deep either is.
 flattened into the message string. The `*Error` is still what a caller matches
 with `errors.As`.
 
+**`jwt.GenerateSecret(alg)`.** Returns a random HMAC secret exactly as long as
+`NewHMACSigner` and `NewHMACVerifier` require - 32 bytes for HS256, 48 for
+HS384, 64 for HS512 - and refuses an algorithm that has no shared secret,
+pointing at `GenerateKey` instead.
+
+**`cmd/aiozkey`, the first command in this module.** `aiozkey jwt keygen`
+writes a signing key pair in the layout `jwt.LoadKeyRing` reads and prints the
+kid tokens will carry; `aiozkey jwt secret` prints an HMAC secret from
+`GenerateSecret`. It is a thin shell over `jwt`, so its output cannot drift from
+what the package loads. `make tools` cross-compiles it for linux/amd64,
+linux/arm64 and darwin/arm64 with a `SHA256SUMS`.
+
+**`tools:build` CI job.** Opt-in: it runs only for a pipeline started with
+`BUILD_TOOLS=true`, on the default branch or a tag, and uploads the binaries
+over FTP to the team file server, where they are served at
+`http://10.0.0.106:8021/aioz-common/aiozkey/`. It needs protected `FTP_USER` and
+`FTP_PASSWORD` variables.
+
 ### Changed
+
+**CI runs on the Go 1.26 `ci-builder` image.** The shared profile's default,
+`registry:5000/go:1.25` with `GOTOOLCHAIN=local`, cannot build a module whose
+`go.mod` requires Go 1.26, so `GO_IMAGE` is now pinned to
+`ci-builder:go1.26-8d4e8b9cfefa` by tag and digest.
 
 **`depin.Storage` is three methods wider.** Anything outside this repo
 implementing it needs `DownloadRange`, `CreateLocalTicket` and `Account`;

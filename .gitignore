@@ -1,2 +1,3 @@
 .cache/
 golangci-lint-report.xml
+dist/
