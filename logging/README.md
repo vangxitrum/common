@@ -56,8 +56,11 @@ all).
 
 **Elasticsearch sink** (`log.elasticsearch.*`): `enabled`, `url` (base URL, no
 path), `data-stream`, `bearer-token` / `api-key` / `username` + `password`,
-`batch-size`, `flush-interval`, `timeout`, `index-fields`, `service`. Blank
-`service` uses the hostname; `host.name` is always the hostname.
+`batch-size`, `flush-interval`, `timeout`, `index-fields`, `service`, `role`,
+`env`. Blank `service` uses the hostname; `host.name` is always the hostname.
+`env` is stamped as `service.environment` and must be `staging`, `production`
+or blank (no field): staging and production of one service share a data
+stream, and this is the only field that tells their records apart.
 
 **Sampling** (`log.sampling.*`): `enabled`, `tick` (the window), `initial`
 (records that always pass per window), `thereafter` (after the burst, every

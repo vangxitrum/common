@@ -321,6 +321,37 @@ func TestElasticsearchSink_RoleIsStampedOnEveryDocument(t *testing.T) {
 		"a process deployed as several roles is only tellable apart by this")
 }
 
+func TestElasticsearchSink_EnvIsStampedAsServiceEnvironment(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	cfg.Env = "staging"
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "m", nil))
+
+	_, _, docs := recv.snapshot()
+	service := docs[0]["service"].(map[string]any)
+	require.Equal(t, "staging", service["environment"],
+		"staging and production share a data stream; this is what tells them apart")
+	require.Equal(t, "testsvc", service["name"], "it sits beside service.name, not in place of it")
+}
+
+func TestElasticsearchSink_BlankEnvWritesNoField(t *testing.T) {
+	recv := newBulkRecorder(t)
+	cfg := testESConfig(recv.URL)
+	cfg.BatchSize = 1
+	sink := newElasticsearchSink(cfg)
+	defer func() { _ = sink.Close() }()
+
+	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "m", nil))
+
+	_, _, docs := recv.snapshot()
+	require.NotContains(t, docs[0]["service"].(map[string]any), "environment",
+		"an empty string would be a value an env filter matches by accident")
+}
+
 func TestElasticsearchSink_StructuralFieldsAreIndexedUndeclared(t *testing.T) {
 	recv := newBulkRecorder(t)
 	cfg := testESConfig(recv.URL)
