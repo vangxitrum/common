@@ -8,31 +8,35 @@ import (
 	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 )
 
-// The limits a list endpoint applies when its PageConfig leaves them zero.
+// The limits a list endpoint applies when its PageConfig leaves them zero,
+// aioz-stream's.
 const (
-	DefaultLimit = 20
+	DefaultLimit = 25
 	MaxLimit     = 100
 )
 
 // PageConfig bounds one list endpoint. The zero value is the standard's
-// default of 20 per page and at most 100.
+// default of 25 per page and at most 100; more is a 400.
 type PageConfig struct {
 	DefaultLimit int
 	MaxLimit     int
 }
 
-// Page is the window a client asked for: offset and limit, or a cursor and a
-// limit. Never both an offset and a cursor.
+// Page is the window a list was served with: offset and limit, or a cursor and
+// a limit, never both an offset and a cursor. It is what List echoes back as
+// the query.
 type Page struct {
-	Offset int
-	Limit  int
-	Cursor string
+	Offset int    `json:"offset"`
+	Limit  int    `json:"limit"`
+	Cursor string `json:"cursor,omitempty"`
 }
 
-// ParsePage reads offset, limit and cursor from a query string.
-//
-// A limit above the maximum is refused rather than clamped: a client that
-// asked for 1000 and silently got 100 believes it has the whole list.
+// ParsePage reads offset, limit and cursor from a query string. A missing or
+// non-positive limit is the default, as aioz-stream does. A limit above the
+// maximum is refused rather than clamped: a client that asked for 1000 and
+// silently got 100 believes it has the whole list. A value that is not an
+// integer, a negative offset, an offset with a cursor and a cursor the API did
+// not issue are 400s too.
 func ParsePage(q url.Values, config PageConfig) (Page, error) {
 	if config.DefaultLimit <= 0 {
 		config.DefaultLimit = DefaultLimit
@@ -45,35 +49,26 @@ func ParsePage(q url.Values, config PageConfig) (Page, error) {
 
 	if raw := q.Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
-		if err != nil || limit < 1 {
-			return Page{}, apierr.BadRequest(
-				"invalid-limit",
-				"limit must be a positive integer",
-			)
+		if err != nil {
+			return Page{}, apierr.BadRequest("invalid-limit", "limit must be an integer")
 		}
-		if limit > config.MaxLimit {
-			return Page{}, apierr.BadRequest(
-				"limit-too-large",
-				"limit must be at most %d",
-				config.MaxLimit,
-			)
+		switch {
+		case limit <= 0:
+			page.Limit = config.DefaultLimit
+		case limit > config.MaxLimit:
+			return Page{}, apierr.BadRequest("limit-too-large", "limit must be at most %d", config.MaxLimit)
+		default:
+			page.Limit = limit
 		}
-		page.Limit = limit
 	}
 
 	if raw := q.Get("offset"); raw != "" {
 		if page.Cursor != "" {
-			return Page{}, apierr.BadRequest(
-				"offset-with-cursor",
-				"use offset or cursor, not both",
-			)
+			return Page{}, apierr.BadRequest("offset-with-cursor", "use offset or cursor, not both")
 		}
 		offset, err := strconv.Atoi(raw)
 		if err != nil || offset < 0 {
-			return Page{}, apierr.BadRequest(
-				"invalid-offset",
-				"offset must be a non-negative integer",
-			)
+			return Page{}, apierr.BadRequest("invalid-offset", "offset must be a non-negative integer")
 		}
 		page.Offset = offset
 	}
@@ -84,11 +79,6 @@ func ParsePage(q url.Values, config PageConfig) (Page, error) {
 		}
 	}
 	return page, nil
-}
-
-// Metadata is the metadata of this page of an offset list.
-func (p Page) Metadata(total int64) Metadata {
-	return Metadata{Offset: p.Offset, Limit: p.Limit, Total: total}
 }
 
 // EncodeCursor makes an opaque cursor from whatever the store needs to resume:

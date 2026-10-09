@@ -6,14 +6,17 @@
 
 **`httpapi`, with `httpapi/echoapi` and `httpapi/ginapi`: the team HTTP API
 standard as code.** One `net/http` core renders the success envelope
-(`{"status":"success","data":...,"metadata":...}`) and the error body
+(`{"status":"success","data":...}`, a list as
+`"data":{"videos":[...],"total":N}` as aioz-stream answers, with the served
+`query` beside `data`) and the error body
 (`{"status":"error","reason","message","request_id","details"}`) from
 `apierr`, so a 5xx never carries its cause and an error is never cached. A
 success may carry a `message` for a person, alone (`httpapi.Message`) or with
 data (`Success(v).WithMessage`); `data` and `message` are omitted when empty,
 except a list's `data`, which is always `[]` at least.
-`ParsePage` reads `offset`/`limit`/`cursor` with a default of 20 and a hard
-maximum of 100, refusing rather than clamping. `CachePolicy` (public, private,
+`ParsePage` reads `offset`/`limit`/`cursor` as aioz-stream does: a default of
+25 (a non-positive limit is the default) and a maximum of 100 that is refused
+with a 400 rather than clamped, and `List` echoes the served page as `query`. `CachePolicy` (public, private,
 revalidate, no-store) sets `Cache-Control` and `Vary`; `ETag`, `NotModified`
 and `CheckETag` answer `If-None-Match` with a 304 by RFC 9110's weak
 comparison. `DecodeJSON` is strict: 415 for a body that is not JSON, a 400

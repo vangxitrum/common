@@ -21,6 +21,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -41,17 +42,18 @@ const (
 //	{"status":"success","data":{...}}
 //	{"status":"success","message":"password changed"}
 //	{"status":"success","message":"video published","data":{...}}
-//	{"status":"success","data":[...],"metadata":{"offset":0,"limit":20,"total":53}}
+//	{"status":"success","data":{"videos":[...],"total":53},"query":{"offset":0,"limit":25}}
 //
 // Message is optional text for a person, shown as-is by a client (a toast, a
 // banner). A client never branches on it: what happened is the status code and
-// the data. Message and Data are each omitted when empty, but a list's data is
-// always present, as [] when it has no items.
+// the data. Query is the request a list was actually served with, beside the
+// data rather than inside it. Message, Data and Query are each omitted when
+// empty.
 type Envelope struct {
-	Status   string `json:"status"`
-	Message  string `json:"message,omitempty"`
-	Data     any    `json:"data,omitempty"`
-	Metadata any    `json:"metadata,omitempty"`
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+	Data    any    `json:"data,omitempty"`
+	Query   any    `json:"query,omitempty"`
 }
 
 // Message is a success that has nothing to return but a sentence for a person.
@@ -64,34 +66,84 @@ func (e Envelope) WithMessage(text string) Envelope {
 	return e
 }
 
-// Metadata describes one page of an offset-paginated list.
-type Metadata struct {
-	Offset int   `json:"offset"`
-	Limit  int   `json:"limit"`
-	Total  int64 `json:"total"`
-}
-
-// CursorMetadata describes one page of a cursor-paginated list. NextCursor is
-// empty on the last page.
-type CursorMetadata struct {
-	Limit      int    `json:"limit"`
-	NextCursor string `json:"next_cursor,omitempty"`
-}
-
 // Success wraps data in the success envelope.
-func Success(
-	data any,
-) Envelope {
-	return Envelope{Status: StatusSuccess, Data: data}
-}
+func Success(data any) Envelope { return Envelope{Status: StatusSuccess, Data: data} }
 
-// List wraps one page of items with its metadata. A nil slice is sent as an
-// empty array, never null, so a client can always iterate.
-func List[T any](items []T, metadata any) Envelope {
+// List is one page of a collection: the items under the collection's own name
+// and the total across every page in data, as aioz-stream answers, and beside
+// it the query as it was actually served, with its defaults applied, so a
+// caller sees the limit and sort it got without having sent them.
+//
+//	httpapi.List("videos", videos, total, page)
+//	{"status":"success","data":{"videos":[...],"total":53},"query":{"offset":0,"limit":25}}
+//
+// query is usually the Page, or the endpoint's whole normalized request when
+// it has filters; nil leaves it out. A nil slice is sent as [], never null, so
+// a client can always iterate.
+func List[T any](key string, items []T, total int64, query any) Envelope {
 	if items == nil {
 		items = []T{}
 	}
-	return Envelope{Status: StatusSuccess, Data: items, Metadata: metadata}
+	env := Success(listData{key: key, items: items, total: &total})
+	env.Query = query
+	return env
+}
+
+// CursorList is List for a cursor-paginated collection: no total, and the
+// cursor of the next page, left out on the last one.
+//
+//	{"status":"success","data":{"events":[...],"next_cursor":"eyJpZCI6NDJ9"},"query":{"limit":25}}
+func CursorList[T any](key string, items []T, nextCursor string, query any) Envelope {
+	if items == nil {
+		items = []T{}
+	}
+	env := Success(listData{key: key, items: items, nextCursor: nextCursor})
+	env.Query = query
+	return env
+}
+
+// listData writes its fields in a fixed order - the items, then the total or
+// the next cursor - under a key only known at run time.
+type listData struct {
+	key        string
+	items      any
+	total      *int64
+	nextCursor string
+}
+
+func (l listData) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	write := func(name string, v any) error {
+		if buf.Len() > 0 {
+			buf.WriteByte(',')
+		}
+		k, err := json.Marshal(name)
+		if err != nil {
+			return err
+		}
+		val, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		buf.Write(k)
+		buf.WriteByte(':')
+		buf.Write(val)
+		return nil
+	}
+	if err := write(l.key, l.items); err != nil {
+		return nil, err
+	}
+	if l.total != nil {
+		if err := write("total", *l.total); err != nil {
+			return nil, err
+		}
+	}
+	if l.nextCursor != "" {
+		if err := write("next_cursor", l.nextCursor); err != nil {
+			return nil, err
+		}
+	}
+	return append(append([]byte{'{'}, buf.Bytes()...), '}'), nil
 }
 
 // WriteJSON writes v as the JSON body with status.
