@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/random"
 )
 
 // KeyType is the kind of key [GenerateKey] makes.
@@ -70,6 +72,22 @@ func GenerateKey(kind KeyType, rsaBits int) (crypto.Signer, error) {
 		return nil, Error.Errorf("unknown key type %q; use %q or %q",
 			kind, KeyTypeEd25519, KeyTypeRSA)
 	}
+}
+
+// GenerateSecret returns a new random shared secret for the HMAC algorithm
+// alg, exactly as long as [NewHMACSigner] and [NewHMACVerifier] require: 32
+// bytes for HS256, 48 for HS384, 64 for HS512.
+//
+// Any other algorithm is refused: a key pair algorithm has no shared secret,
+// and the place to make its key is [GenerateKey].
+func GenerateSecret(alg Algorithm) ([]byte, error) {
+	if !alg.IsHMAC() {
+		return nil, Error.Errorf(
+			"algorithm %q has no shared secret; use one of %q, %q or %q",
+			alg, HS256, HS384, HS512,
+		)
+	}
+	return random.Bytes(algorithms[alg].minSecretLen), nil
 }
 
 // WritePrivateKey writes key as a PKCS#8 PEM file, <dir>/<name>.pem, readable

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/jwt"
 
@@ -188,4 +189,47 @@ func TestWriteKeyRefusesUnusableKeys(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Empty(t, entries)
+}
+
+// A generated secret is exactly what the HMAC constructors accept, and
+// different every time.
+func TestGenerateSecret(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	for alg, n := range map[jwt.Algorithm]int{
+		jwt.HS256: 32,
+		jwt.HS384: 48,
+		jwt.HS512: 64,
+	} {
+		t.Run(string(alg), func(t *testing.T) {
+			key, err := jwt.GenerateSecret(alg)
+			require.NoError(t, err)
+			require.Len(t, key, n)
+
+			other, err := jwt.GenerateSecret(alg)
+			require.NoError(t, err)
+			require.NotEqual(t, key, other)
+
+			signer, err := jwt.NewHMACSigner(alg, key, jwt.WithTTL(time.Minute))
+			require.NoError(t, err)
+			verifier, err := jwt.NewHMACVerifier(alg, key)
+			require.NoError(t, err)
+
+			token, err := signer.Sign(ctx, jwt.Claims{Subject: "user-1"})
+			require.NoError(t, err)
+			claims, err := verifier.Verify(ctx, token.Reveal())
+			require.NoError(t, err)
+			require.Equal(t, "user-1", claims.Subject)
+		})
+	}
+}
+
+func TestGenerateSecretRefusesKeyPairAlgorithms(t *testing.T) {
+	t.Parallel()
+
+	for _, alg := range []jwt.Algorithm{jwt.EdDSA, jwt.RS256, jwt.ES256, "none", ""} {
+		_, err := jwt.GenerateSecret(alg)
+		require.ErrorContains(t, err, "has no shared secret", alg)
+	}
 }
