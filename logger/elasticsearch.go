@@ -409,8 +409,8 @@ func parseRequestLine(doc map[string]any, msg string) {
 		return
 	}
 
-	if isHTTPMethod(fields[0]) {
-		setNested(doc, "http", "request", map[string]any{"method": fields[0]})
+	if method, ok := httpMethod(fields[0]); ok {
+		setNested(doc, "http", "request", map[string]any{"method": method})
 	}
 
 	for _, f := range fields[1:] {
@@ -482,14 +482,22 @@ func setNested(doc map[string]any, top, mid string, sub map[string]any) {
 	}
 }
 
-// isHTTPMethod reports whether s is an HTTP method, so a message that merely
-// starts with a capitalised word does not get one invented for it.
-func isHTTPMethod(s string) bool {
+// httpMethod reads the first word of a request line as an HTTP method, so a
+// message that merely starts with a capitalised word does not get one invented
+// for it. The request line names POST, PATCH and DELETE in three letters (PST,
+// PTC, DEL) so its columns line up; ECS wants the method itself.
+func httpMethod(s string) (string, bool) {
 	switch s {
 	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE":
-		return true
+		return s, true
+	case "PST":
+		return "POST", true
+	case "PTC":
+		return "PATCH", true
+	case "DEL":
+		return "DELETE", true
 	}
-	return false
+	return "", false
 }
 
 // logOrigin returns doc's log.origin object, creating it if this is the first

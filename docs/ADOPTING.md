@@ -265,6 +265,17 @@ Use `BlockThenAdvance`, not bare `Advance`: if the code under test has not
 created its timer yet, the jump passes it by and the test hangs or passes for
 the wrong reason.
 
+## The HTTP API stack
+
+[`httpapi`](../httpapi/README.md) is team-playbook's HTTP API standard as code.
+An echo service calls `echoapi.Setup`, a gin service `ginapi.Setup`, with the
+same validated `httpapi.Stack`; both get the request id, security headers and
+CORS, access log, recovery, body limit, metrics and the standard error body,
+in the same order. Handlers answer through `OK`/`Created`/`List`, read pages
+with `Page`, bind with `Bind`, and declare each GET's cache policy with
+`Cache`. Replace a service's own envelope, error handler and hand-written
+`Cache-Control` strings with these, one route group at a time.
+
 ## Errors that cross the HTTP boundary
 
 [`apierr`](../apierr/README.md) carries a status, a machine-readable reason
