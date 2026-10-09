@@ -90,7 +90,7 @@ HS256, 48 for HS384, 64 for HS512. An HMAC secret is guessed offline against a
 single captured token, with no rate limit and nobody watching. A short one is a
 password, and this is not the package for passwords. `GenerateSecret(alg)`
 returns one of exactly the right length, and refuses an algorithm that has no
-shared secret; `aiozkey jwt secret` (see [`cmd/aiozkey`](../cmd/aiozkey/README.md))
+shared secret; `aiozkey jwt secret` (see [`tools/aiozkey`](../tools/aiozkey/README.md))
 prints one for a secret store.
 
 **A signed token is a `secret.Token`**, so it cannot reach a log line or a
@@ -213,7 +213,7 @@ command built on `GenerateKey`, `WritePrivateKey` and `WritePublicKey`. It
 writes `<name>.pem` with mode 0600 and `<name>.pub.pem` with 0644, refuses to
 overwrite an existing file, since that file may be the only copy of a key
 whose tokens are still in flight, and refuses a name `LoadKeyRing` would not
-read back. [`aiozkey jwt keygen`](../cmd/aiozkey/README.md) is that command,
+read back. [`aiozkey jwt keygen`](../tools/aiozkey/README.md) is that command,
 ready-built, for a service that has no `genkey` of its own.
 
 ```go
