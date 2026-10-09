@@ -115,6 +115,26 @@ A service that serves HTML sets its own `content-security-policy` (start from
 `default-src 'self'; frame-ancestors 'none'`) and usually
 `cross-origin-resource-policy: same-origin`.
 
+### A different policy for some routes
+
+The default policy lets a page load nothing, which suits JSON and breaks any
+page an API serves, such as Swagger UI: its scripts, stylesheets and images
+are all refused and it renders blank.
+Give those routes their own policy instead of loosening it for every route:
+
+```go
+csp, err := httpsec.NewContentSecurityPolicy(httpsec.SwaggerUIPolicy)
+mux.Handle("/swagger/", csp.Wrap(swaggerHandler)) // inside headers.Wrap, so it replaces the default
+```
+
+`httpapi`'s adapters have `ginapi.ContentSecurityPolicy` and
+`echoapi.ContentSecurityPolicy` for the same thing.
+`SwaggerUIPolicy` loads only from this server and allows inline script and
+style, which echo-swagger's start-up script needs; it is checked in headless
+Chrome against gin-swagger v1.6.1 and echo-swagger v1.4.1.
+Keep it on the docs route: never give it to a route that renders what a user
+wrote.
+
 ## CORS
 
 - **Empty `allowed-origins` turns CORS off.** No `Access-Control-*` header is

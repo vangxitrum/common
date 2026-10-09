@@ -25,6 +25,7 @@ import (
 	"github.com/spacemonkeygo/monkit/v3"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpsec"
 )
 
 var mon = monkit.Package()
@@ -205,6 +206,25 @@ func BodyLimit(limit int64) gin.HandlerFunc {
 			abort(c, err)
 			return
 		}
+		c.Next()
+	}
+}
+
+// ContentSecurityPolicy sets a route's or group's Content-Security-Policy in
+// place of the stack's, which lets nothing load and suits only JSON. Use it
+// on routes that serve a page, such as Swagger UI:
+//
+//	r.GET("/swagger/*any", ginapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy), ginSwagger.WrapHandler(swaggerFiles.Handler))
+//
+// An invalid policy is a programming error found when routes are registered,
+// so it panics.
+func ContentSecurityPolicy(policy string) gin.HandlerFunc {
+	csp, err := httpsec.NewContentSecurityPolicy(policy)
+	if err != nil {
+		panic(err)
+	}
+	return func(c *gin.Context) {
+		csp.Apply(c.Writer.Header())
 		c.Next()
 	}
 }

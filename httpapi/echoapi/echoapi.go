@@ -27,6 +27,7 @@ import (
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpsec"
 )
 
 var mon = monkit.Package()
@@ -217,6 +218,27 @@ func BodyLimit(limit int64) echo.MiddlewareFunc {
 			if err := httpapi.SetBodyLimit(c.Response(), c.Request(), limit); err != nil {
 				return err
 			}
+			return next(c)
+		}
+	}
+}
+
+// ContentSecurityPolicy sets a route's or group's Content-Security-Policy in
+// place of the stack's, which lets nothing load and suits only JSON. Use it
+// on routes that serve a page, such as Swagger UI:
+//
+//	e.GET("/swagger/*", echoSwagger.WrapHandler, echoapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy))
+//
+// An invalid policy is a programming error found when routes are registered,
+// so it panics, like Cache.
+func ContentSecurityPolicy(policy string) echo.MiddlewareFunc {
+	csp, err := httpsec.NewContentSecurityPolicy(policy)
+	if err != nil {
+		panic(err)
+	}
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			csp.Apply(c.Response().Header())
 			return next(c)
 		}
 	}

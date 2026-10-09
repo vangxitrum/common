@@ -12,6 +12,7 @@ import (
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi"
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi/ginapi"
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi/internal/conformance"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpsec"
 )
 
 func TestConformance(t *testing.T) {
@@ -118,6 +119,10 @@ func TestConformance(t *testing.T) {
 		return ginapi.OK(c, map[string]bool{"ok": true})
 	}))
 
+	r.GET("/docs", ginapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy), ginapi.Handle(func(c *gin.Context) error {
+		return ginapi.OK(c, map[string]bool{"docs": true})
+	}))
+
 	conformance.Run(t, r)
 	conformance.RunLogs(t, r, logs)
 }
@@ -143,4 +148,13 @@ func TestBodyLimitRejectsANonPositiveLimit(t *testing.T) {
 		}
 	}()
 	ginapi.BodyLimit(0)
+}
+
+func TestContentSecurityPolicyRejectsAnInvalidPolicy(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("ContentSecurityPolicy(\"\") did not panic")
+		}
+	}()
+	ginapi.ContentSecurityPolicy("")
 }

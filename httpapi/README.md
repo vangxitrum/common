@@ -56,7 +56,8 @@ api:
 ### What a service can change
 
 What a client sees is fixed: the envelope, the error body, `reason`, the
-request id, the security headers and CORS have no switch, because a standard
+request id, the security headers and CORS have no switch (bar a page route's
+Content-Security-Policy, below), because a standard
 every service can bend is not a standard. What differs between services is how
 the stack runs, and `Setup` takes options for that:
 
@@ -83,6 +84,17 @@ api.POST("/webhooks/stripe", ginapi.BodyLimit(64<<10), ginapi.Handle(hook))  // 
 
 A limit of zero or less panics at registration. `httpapi.SetBodyLimit` is the
 same for a plain `net/http` handler.
+
+A route that serves a page sets its own Content-Security-Policy. The stack's
+lets a page load nothing, so without this Swagger UI renders blank:
+
+```go
+r.GET("/swagger/*any", ginapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy), ginSwagger.WrapHandler(swaggerFiles.Handler)) // gin
+e.GET("/swagger/*", echoSwagger.WrapHandler, echoapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy))                    // echo
+```
+
+Every other route keeps the strict policy. See
+[`httpsec`](../httpsec/README.md#a-different-policy-for-some-routes).
 
 ## Handlers
 

@@ -24,6 +24,7 @@
 //	                     OK({"bytes": n}), or return the read error
 //	POST /v1/webhook     BodyLimit(WebhookLimit); the same as /v1/echo
 //	GET  /health         OK({"ok": true})
+//	GET  /docs           ContentSecurityPolicy(httpsec.SwaggerUIPolicy); OK({"docs": true})
 //
 // and passes Options to Setup.
 package conformance
@@ -137,9 +138,10 @@ var checks = []check{
 			status: 200,
 			body:   `{"status":"success","data":{"id":"42"}}`,
 			headers: map[string]string{
-				"Content-Type":           errorCT,
-				"Cache-Control":          "no-store",
-				"X-Content-Type-Options": "nosniff",
+				"Content-Type":            errorCT,
+				"Cache-Control":           "no-store",
+				"X-Content-Type-Options":  "nosniff",
+				"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 			},
 			// HSTS is opt-in in httpsec, and this stack leaves it off.
 			absent: []string{"Strict-Transport-Security"},
@@ -514,6 +516,17 @@ var checks = []check{
 		expect{
 			status: 200,
 			absent: []string{"Access-Control-Allow-Origin", "Access-Control-Expose-Headers"},
+		},
+	},
+	{
+		"a docs route has its own content security policy",
+		request{method: "GET", path: "/docs"},
+		expect{
+			status: 200,
+			headers: map[string]string{
+				"Content-Security-Policy": httpsec.SwaggerUIPolicy,
+				"X-Frame-Options":         "DENY",
+			},
 		},
 	},
 	{
