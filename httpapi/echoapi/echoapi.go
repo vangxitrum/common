@@ -34,8 +34,8 @@ var mon = monkit.Package()
 // Setup installs the standard stack on e, in this order:
 //
 //  1. client IP from the trusted proxies (c.RealIP)
-//  2. request id: the caller's when sane, else a new one; on the response,
-//     the context and every outbound call
+//  2. request id: a new one for every request, never the caller's; on the
+//     response, the context and every outbound call
 //  3. security headers and CORS, before routing so a preflight to any path is
 //     answered
 //  4. access log, which sees the status the error handler finally wrote
@@ -81,7 +81,7 @@ func Setup(e *echo.Echo, log *slog.Logger, stack *httpapi.Stack, opts ...httpapi
 
 func requestID(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		id := httpapi.RequestID(c.Request())
+		id := httpapi.NewRequestID()
 		c.Response().Header().Set(httpapi.RequestIDHeader, id)
 		c.SetRequest(
 			c.Request().

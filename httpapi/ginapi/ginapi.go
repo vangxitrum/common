@@ -85,7 +85,7 @@ func security(stack *httpapi.Stack) gin.HandlerFunc {
 }
 
 func requestID(c *gin.Context) {
-	id := httpapi.RequestID(c.Request)
+	id := httpapi.NewRequestID()
 	c.Writer.Header().Set(httpapi.RequestIDHeader, id)
 	c.Request = c.Request.WithContext(
 		httpapi.WithRequestID(c.Request.Context(), id),

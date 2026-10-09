@@ -38,7 +38,7 @@ ginapi.Setup(r, log, stack)
 | # | What | Why there |
 | --- | --- | --- |
 | 1 | Client IP from the trusted proxies | Everything after logs and limits by the real address |
-| 2 | Request id: the caller's when sane (1-128 of `A-Za-z0-9-_.:`), else a UUIDv7 | On the response, the context and every `httpclient` call made while serving; always in `Access-Control-Expose-Headers`, so a frontend on an allowed origin can read it |
+| 2 | Request id: a new UUIDv7 for every request; an `X-Request-Id` the caller sends is ignored, so no client can pick an id that sends an investigation down the wrong trail | On the response, the context and every `httpclient` call made while serving; always in `Access-Control-Expose-Headers`, so a frontend on an allowed origin can read it |
 | 3 | `httpsec` headers and CORS | A preflight to any path is answered; every response has the headers, `Cache-Control: no-store` by default |
 | 4 | Access log | Sees the status the error renderer finally wrote; aioz-stream's request line, below |
 | 5 | Panic recovery | A panic is a classified 500, not a dead process |

@@ -154,19 +154,18 @@ var checks = []check{
 		},
 		expect{
 			status: 404,
-			body:   `{"status":"error","reason":"item-not-found","message":"no such item","request_id":"req-1"}`,
+			body:   `{"status":"error","reason":"item-not-found","message":"no such item","request_id":"<generated>"}`,
 			headers: map[string]string{
-				"X-Request-Id":  "req-1",
 				"Cache-Control": "no-store",
 			},
 		},
 	},
 	{
-		"a caller's unsafe request id is replaced",
+		"a caller's request id is never used, however sane",
 		request{
 			method:  "GET",
 			path:    "/v1/items/1",
-			headers: map[string]string{"X-Request-Id": "bad id\n"},
+			headers: map[string]string{"X-Request-Id": "trace-1"},
 		},
 		expect{
 			status: 200,
@@ -197,7 +196,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"limit-too-large","message":"limit must be at most 100","request_id":"r"}`,
+			body:   `{"status":"error","reason":"limit-too-large","message":"limit must be at most 100","request_id":"<generated>"}`,
 		},
 	},
 
@@ -210,7 +209,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"offset-with-cursor","message":"use offset or cursor, not both","request_id":"r"}`,
+			body:   `{"status":"error","reason":"offset-with-cursor","message":"use offset or cursor, not both","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -255,7 +254,7 @@ var checks = []check{
 		},
 		expect{
 			status:  409,
-			body:    `{"status":"error","reason":"busy","message":"try later","request_id":"r"}`,
+			body:    `{"status":"error","reason":"busy","message":"try later","request_id":"<generated>"}`,
 			headers: map[string]string{"Cache-Control": "no-store"},
 		},
 	},
@@ -268,7 +267,7 @@ var checks = []check{
 		},
 		expect{
 			status: 500,
-			body:   `{"status":"error","reason":"internal","message":"an unexpected error occurred","request_id":"r"}`,
+			body:   `{"status":"error","reason":"internal","message":"an unexpected error occurred","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -280,7 +279,7 @@ var checks = []check{
 		},
 		expect{
 			status: 500,
-			body:   `{"status":"error","reason":"panic","message":"an unexpected error occurred","request_id":"r"}`,
+			body:   `{"status":"error","reason":"panic","message":"an unexpected error occurred","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -292,7 +291,7 @@ var checks = []check{
 		},
 		expect{
 			status:  429,
-			body:    `{"status":"error","reason":"slow-down","message":"too many requests","request_id":"r"}`,
+			body:    `{"status":"error","reason":"slow-down","message":"too many requests","request_id":"<generated>"}`,
 			headers: map[string]string{"Retry-After": "1"},
 		},
 	},
@@ -305,7 +304,7 @@ var checks = []check{
 		},
 		expect{
 			status: 404,
-			body:   `{"status":"error","reason":"route-not-found","message":"Not Found","request_id":"r"}`,
+			body:   `{"status":"error","reason":"route-not-found","message":"Not Found","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -317,7 +316,7 @@ var checks = []check{
 		},
 		expect{
 			status: 405,
-			body:   `{"status":"error","reason":"method-not-allowed","message":"Method Not Allowed","request_id":"r"}`,
+			body:   `{"status":"error","reason":"method-not-allowed","message":"Method Not Allowed","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -346,7 +345,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"unknown-field","message":"request body has a field this API does not accept","request_id":"r","details":[{"field":"nam","reason":"unknown-field"}]}`,
+			body:   `{"status":"error","reason":"unknown-field","message":"request body has a field this API does not accept","request_id":"<generated>","details":[{"field":"nam","reason":"unknown-field"}]}`,
 		},
 	},
 	{
@@ -362,7 +361,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"invalid-json","message":"request body is not valid JSON for this endpoint","request_id":"r"}`,
+			body:   `{"status":"error","reason":"invalid-json","message":"request body is not valid JSON for this endpoint","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -378,7 +377,7 @@ var checks = []check{
 		},
 		expect{
 			status: 415,
-			body:   `{"status":"error","reason":"unsupported-media-type","message":"request body must be application/json","request_id":"r"}`,
+			body:   `{"status":"error","reason":"unsupported-media-type","message":"request body must be application/json","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -394,7 +393,7 @@ var checks = []check{
 		},
 		expect{
 			status: 413,
-			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -432,7 +431,7 @@ var checks = []check{
 		},
 		expect{
 			status: 413,
-			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -446,7 +445,7 @@ var checks = []check{
 		},
 		expect{
 			status: 413,
-			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -462,7 +461,7 @@ var checks = []check{
 		},
 		expect{
 			status: 413,
-			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -583,8 +582,11 @@ func Run(t *testing.T, h http.Handler) {
 				}
 			}
 			id := w.Header().Get(httpapi.RequestIDHeader)
-			if id == "" || strings.ContainsAny(id, " \n") {
-				t.Errorf("request id %q", id)
+			if len(id) != 36 {
+				t.Errorf("request id %q, want a UUID the server made", id)
+			}
+			if sent := c.req.headers["X-Request-Id"]; sent != "" && id == sent {
+				t.Errorf("the caller's request id %q was used", sent)
 			}
 
 			switch {
@@ -611,6 +613,11 @@ func Run(t *testing.T, h http.Handler) {
 						m["request_id"],
 						id,
 					)
+				}
+				// "<generated>" stands for the id the server made, which
+				// the check above already holds to the header's.
+				if m, ok := want.(map[string]any); ok && m["request_id"] == "<generated>" {
+					m["request_id"] = id
 				}
 				gotJSON, _ := json.Marshal(got)
 				wantJSON, _ := json.Marshal(want)
@@ -668,26 +675,28 @@ func RunLogs(t *testing.T, h http.Handler, logs *Logs) {
 	}{
 		{"success", "GET", "/v1/items/42?token=secret", "log-1",
 			"\x1b[94mGET\x1b[0m status:\x1b[32m200\x1b[0m latency:", " url:/v1/items/42",
-			map[string]any{"group": "api", "request_id": "log-1", "route": "/v1/items/:id"},
+			map[string]any{"group": "api", "route": "/v1/items/:id"},
 			[]string{"reason", "err"}},
 		{"unrouted", "GET", "/v1/nothing-here", "log-2",
 			"\x1b[94mGET\x1b[0m status:\x1b[33m404\x1b[0m latency:", " url:/v1/nothing-here",
-			map[string]any{"group": "api", "request_id": "log-2", "reason": "route-not-found"},
+			map[string]any{"group": "api", "reason": "route-not-found"},
 			[]string{"err"}},
 		{"server fault", "GET", "/v1/plain", "log-3",
 			"\x1b[94mGET\x1b[0m status:\x1b[31m500\x1b[0m latency:", " url:/v1/plain",
-			map[string]any{"group": "api", "request_id": "log-3", "reason": "internal", "err": "db down: host 10.0.0.5"},
+			map[string]any{"group": "api", "reason": "internal", "err": "db down: host 10.0.0.5"},
 			nil},
 		{"three-letter method", "POST", "/v1/password", "log-4",
 			"\x1b[92mPST\x1b[0m status:\x1b[32m200\x1b[0m latency:", " url:/v1/password",
-			map[string]any{"group": "api", "request_id": "log-4"},
+			map[string]any{"group": "api"},
 			nil},
 	} {
 		t.Run("log "+c.name, func(t *testing.T) {
 			logs.records(t) // drop anything earlier
 			r := httptest.NewRequest(c.method, c.path, nil)
 			r.Header.Set("X-Request-Id", c.reqID)
-			h.ServeHTTP(httptest.NewRecorder(), r)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			id := w.Header().Get(httpapi.RequestIDHeader)
 
 			var access map[string]any
 			for _, rec := range logs.records(t) {
@@ -701,6 +710,10 @@ func RunLogs(t *testing.T, h http.Handler, logs *Logs) {
 			msg, _ := access["msg"].(string)
 			if !strings.HasPrefix(msg, c.msgPrefix) || !strings.HasSuffix(msg, c.msgSuffix) {
 				t.Errorf("msg %q, want %q...%q", msg, c.msgPrefix, c.msgSuffix)
+			}
+			if access["request_id"] != id || id == c.reqID {
+				t.Errorf("request_id %v, want the response's %q and never the caller's %q",
+					access["request_id"], id, c.reqID)
 			}
 			if access["level"] != "INFO" {
 				t.Errorf("level %v", access["level"])

@@ -189,17 +189,10 @@ func TestWriteErrorIsNeverCached(t *testing.T) {
 	}
 }
 
-func TestRequestID(t *testing.T) {
-	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set(httpapi.RequestIDHeader, "trace-1:abc.DEF_2")
-	if got := httpapi.RequestID(r); got != "trace-1:abc.DEF_2" {
-		t.Errorf("a sane caller id was replaced: %q", got)
-	}
-	for _, bad := range []string{"", "has space", "line\nbreak", strings.Repeat("a", 129), `quote"`} {
-		r.Header.Set(httpapi.RequestIDHeader, bad)
-		if got := httpapi.RequestID(r); got == bad || len(got) != 36 {
-			t.Errorf("caller id %q gave %q, want a new UUID", bad, got)
-		}
+func TestNewRequestIDIsAFreshUUID(t *testing.T) {
+	a, b := httpapi.NewRequestID(), httpapi.NewRequestID()
+	if len(a) != 36 || len(b) != 36 || a == b {
+		t.Errorf("ids %q and %q, want two different UUIDs", a, b)
 	}
 }
 

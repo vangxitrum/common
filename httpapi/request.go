@@ -15,39 +15,21 @@ import (
 	"gitlab.internal/tuan.quang.tran/aioz-common/uuid"
 )
 
-// RequestIDHeader carries the request id in and out.
+// RequestIDHeader carries the request id out, on every response. An incoming
+// one is ignored; see NewRequestID.
 const RequestIDHeader = "X-Request-Id"
 
-// RequestID returns the id a request is known by: the caller's own, when it
-// sent a sane one, so a trace crosses services under one id; otherwise a new
-// UUIDv7. A caller's id is sane when it is 1-128 characters of letters,
-// digits, '-', '_', '.' and ':'; anything else could forge a log line or
-// blow up a log index, and is replaced.
-func RequestID(r *http.Request) string {
-	if id := r.Header.Get(RequestIDHeader); requestIDSafe(id) {
-		return id
-	}
+// NewRequestID returns the id a request is known by: a new UUIDv7, made by
+// this server for every request. An X-Request-Id the caller sends is never
+// used: a client could otherwise reuse another request's id, or a support
+// ticket's, and send an investigation down the wrong trail, or send one id on
+// every request so the log cannot tell them apart.
+func NewRequestID() string {
 	id, err := uuid.New()
 	if err != nil {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return id.String()
-}
-
-func requestIDSafe(id string) bool {
-	if id == "" || len(id) > 128 {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '-' || c == '_' || c == '.' || c == ':':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // WithRequestID puts id on ctx where httpclient finds it, so every outbound
