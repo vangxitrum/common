@@ -1,3 +1,7 @@
 .cache/
 golangci-lint-report.xml
-dist/
+# A local workspace, for building a tool against an unreleased change here.
+# Never committed: CI and `go install` build each tool against the released
+# aioz-common its go.mod requires.
+go.work
+go.work.sum

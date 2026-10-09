@@ -20,7 +20,7 @@ import (
 )
 
 // binary is the aiozkey the tests run: built once, from this package, the way
-// CI builds the one it ships.
+// `go install` builds the one people run.
 var binary string
 
 func TestMain(m *testing.M) {

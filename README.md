@@ -59,7 +59,7 @@ One command ships alongside the packages:
 
 | Command | What it does |
 | --- | --- |
-| [`cmd/aiozkey`](cmd/aiozkey/README.md) | Makes the keys and secrets the packages load: a jwt key pair laid out for `jwt.LoadKeyRing`, an HMAC secret as long as `jwt.NewHMACSigner` requires. Built for Linux and macOS by an opt-in pipeline and downloadable from the team file server. |
+| [`tools/aiozkey`](tools/aiozkey/README.md) | Makes the keys and secrets the packages load: a jwt key pair laid out for `jwt.LoadKeyRing`, an HMAC secret as long as `jwt.NewHMACSigner` requires. A module of its own, installed with `go install gitlab.internal/tuan.quang.tran/aioz-common/tools/aiozkey@latest`. |
 
 Each component keeps its own README with the full API reference and examples -
 follow the links above. [`docs/ADOPTING.md`](docs/ADOPTING.md) covers what a
@@ -72,8 +72,6 @@ service wires up on day one and how the packages fit together;
 aioz-common/
 ├── apierr/           # HTTP error envelope
 ├── base58/           # base58 and base58check
-├── cmd/
-│   └── aiozkey/      # key and secret generator
 ├── config/           # configuration
 ├── context2/         # the context shapes stdlib lacks
 ├── currency/         # exact money and rates
@@ -103,6 +101,8 @@ aioz-common/
 │   └── slacktest/    # a recording Notifier for tests
 ├── slices2/          # Map and its fallible forms
 ├── time2/            # testable clocks and timers
+├── tools/            # commands, each a module of its own
+│   └── aiozkey/      # key and secret generator
 ├── uuid/             # identifiers
 ├── version/          # the build stamp and semantic versions
 └── stats/            # observability

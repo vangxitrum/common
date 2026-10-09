@@ -5,26 +5,18 @@ Makes the keys and secrets aioz-common's packages load, so what it writes is exa
 It is a thin shell over the library: everything that decides what a key looks like lives in [`jwt`](../../jwt/README.md) and is tested there.
 A hand-rolled `openssl` recipe drifts from what `jwt.LoadKeyRing` expects, and a service finds out only when it fails to start.
 
-## Download
-
-An opt-in pipeline builds it for `linux-amd64`, `linux-arm64` and `darwin-arm64` and uploads it to the team file server:
-
-```
-http://10.0.0.106:8021/aioz-common/aiozkey/<tag or branch>/<short sha>/<os>-<arch>/aiozkey
-http://10.0.0.106:8021/aioz-common/aiozkey/<tag or branch>/<short sha>/SHA256SUMS
-```
+## Install
 
 ```bash
-base=http://10.0.0.106:8021/aioz-common/aiozkey/v0.5.0/abc1234
-mkdir -p linux-amd64
-curl -fsSo linux-amd64/aiozkey "$base/linux-amd64/aiozkey"
-curl -fsS "$base/SHA256SUMS" | grep linux-amd64 | sha256sum -c -
-chmod +x linux-amd64/aiozkey
+go install gitlab.internal/tuan.quang.tran/aioz-common/tools/aiozkey@latest
 ```
 
-Check the checksum before running it: the file server is plain HTTP.
+It needs Go 1.26 or newer and the setup every private module here needs: `GOPRIVATE=gitlab.internal` and git access to `gitlab.internal`.
+`@latest` is the newest `tools/aiozkey/v*` tag; pin one, such as `@v0.1.0`, to get the same binary every time.
+`aiozkey version` prints the version that was installed.
 
-Or build it from a checkout with `go build ./cmd/aiozkey`, or every platform at once with `make tools` (into `dist/`).
+It is a module of its own, apart from aioz-common's root module, because the root `go.mod` carries a `replace` directive (gogo/protobuf, for depin's go-sdk) and `go install <path>@<version>` refuses any module that has one.
+It requires a released aioz-common, so what it builds is what its tests ran against.
 
 ## jwt keygen
 
@@ -75,9 +67,16 @@ The secret is never a flag value, so it never lands in shell history.
 
 `aiozkey version` prints the build stamp from [`version`](../../version/README.md): version, commit, build time and Go version.
 
-## Publishing a build
+## Releasing
 
-The `tools:build` job in `.gitlab-ci.yml` runs only when a pipeline is started from **CI/CD -> Pipelines -> Run pipeline** with `BUILD_TOOLS` set to `true`, and only on the default branch or a tag.
-It runs `make tools`, then `scripts/ci/upload-tool.sh` uploads `dist/aiozkey` over FTP.
-It needs the project's `FTP_USER` and `FTP_PASSWORD` CI/CD variables, protected and masked.
-`TOOLS_FTP_HOST` (default `10.0.0.106`), `TOOLS_FTP_PORT` (default `21`) and `TOOLS_FTP_BASE` (default `/aioznode`, the directory the `:8021` server serves) override the destination.
+Tag the commit with `tools/aiozkey/vX.Y.Z`, the prefix Go looks for in a nested module, and push the tag; `@latest` moves to it.
+The root module's `vX.Y.Z` tags do not release aiozkey, and its tags do not release aioz-common.
+
+CI lints and tests it with `GOWORK=off` (`make lint-modules test-tools`), against the aioz-common version its `go.mod` requires.
+When it needs a change to aioz-common that is not released yet, build against the checkout with a local workspace, which `.gitignore` keeps out of commits:
+
+```bash
+go work init . ./tools/aiozkey
+```
+
+Release aioz-common first, then `go get gitlab.internal/tuan.quang.tran/aioz-common@<that tag>` here, then tag aiozkey.
