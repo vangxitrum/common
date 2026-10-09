@@ -251,11 +251,14 @@ func Created(c echo.Context, data any) error {
 	)
 }
 
-// List answers 200 with one page of items and its metadata.
-func List[T any](c echo.Context, items []T, metadata any) error {
-	return httpapi.WriteJSON(
-		c.Response(),
-		http.StatusOK,
-		httpapi.List(items, metadata),
-	)
+// List answers 200 with one page of a collection: the items under key, the
+// total, and the query as served. See httpapi.List.
+func List[T any](c echo.Context, key string, items []T, total int64, query any) error {
+	return httpapi.WriteJSON(c.Response(), http.StatusOK, httpapi.List(key, items, total, query))
+}
+
+// CursorList answers 200 with one page of a cursor-paginated collection. See
+// httpapi.CursorList.
+func CursorList[T any](c echo.Context, key string, items []T, nextCursor string, query any) error {
+	return httpapi.WriteJSON(c.Response(), http.StatusOK, httpapi.CursorList(key, items, nextCursor, query))
 }

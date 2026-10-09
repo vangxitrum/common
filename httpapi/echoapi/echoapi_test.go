@@ -31,7 +31,7 @@ func TestConformance(t *testing.T) {
 			return err
 		}
 		items := []map[string]string{{"id": "a"}, {"id": "b"}}
-		return echoapi.List(c, items, page.Metadata(53))
+		return echoapi.List(c, "items", items, 53, page)
 	})
 	v1.GET("/cached", func(c echo.Context) error {
 		if echoapi.CheckETag(c, httpapi.ETag("v1")) {

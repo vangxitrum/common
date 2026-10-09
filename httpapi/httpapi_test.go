@@ -120,12 +120,13 @@ func TestParsePage(t *testing.T) {
 		want   httpapi.Page
 		reason string
 	}{
-		{"", httpapi.Page{Limit: 20}, ""},
+		{"", httpapi.Page{Limit: 25}, ""},
 		{"offset=40&limit=10", httpapi.Page{Offset: 40, Limit: 10}, ""},
 		{"limit=100", httpapi.Page{Limit: 100}, ""},
-		{"cursor=" + cursor, httpapi.Page{Limit: 20, Cursor: cursor}, ""},
+		{"cursor=" + cursor, httpapi.Page{Limit: 25, Cursor: cursor}, ""},
 		{"limit=101", httpapi.Page{}, "limit-too-large"},
-		{"limit=0", httpapi.Page{}, "invalid-limit"},
+		{"limit=0", httpapi.Page{Limit: 25}, ""},
+		{"limit=-5", httpapi.Page{Limit: 25}, ""},
 		{"limit=abc", httpapi.Page{}, "invalid-limit"},
 		{"offset=-1", httpapi.Page{}, "invalid-offset"},
 		{"offset=1&cursor=" + cursor, httpapi.Page{}, "offset-with-cursor"},
@@ -207,7 +208,7 @@ func TestMessageAndDataAreOptional(t *testing.T) {
 		{httpapi.Success(map[string]int{"a": 1}), `{"status":"success","data":{"a":1}}`},
 		{httpapi.Message("password changed"), `{"status":"success","message":"password changed"}`},
 		{httpapi.Success(1).WithMessage("done"), `{"status":"success","message":"done","data":1}`},
-		{httpapi.List([]int(nil), nil).WithMessage("none yet"), `{"status":"success","message":"none yet","data":[]}`},
+		{httpapi.List("videos", []int(nil), 0, nil).WithMessage("none yet"), `{"status":"success","message":"none yet","data":{"videos":[],"total":0}}`},
 	} {
 		w := httptest.NewRecorder()
 		if err := httpapi.WriteJSON(w, 200, tc.envelope); err != nil {
@@ -265,17 +266,32 @@ func TestLogAccessIsOneApiGroupRecord(t *testing.T) {
 	}
 }
 
-func TestListNeverSendsNull(t *testing.T) {
-	w := httptest.NewRecorder()
-	var none []string
-	if err := httpapi.WriteJSON(
-		w,
-		200,
-		httpapi.List(none, httpapi.Metadata{Limit: 20}),
-	); err != nil {
-		t.Fatal(err)
+func TestListIsAiozStreamShape(t *testing.T) {
+	type video struct {
+		ID string `json:"id"`
 	}
-	if !strings.Contains(w.Body.String(), `"data":[]`) {
-		t.Errorf("body %s", w.Body.String())
+	page := httpapi.Page{Offset: 25, Limit: 25}
+	for _, tc := range []struct {
+		envelope httpapi.Envelope
+		want     string
+	}{
+		{httpapi.List("videos", []video{{"a"}}, 53, page),
+			`{"status":"success","data":{"videos":[{"id":"a"}],"total":53},"query":{"offset":25,"limit":25}}`},
+		{httpapi.List("videos", []video(nil), 0, page),
+			`{"status":"success","data":{"videos":[],"total":0},"query":{"offset":25,"limit":25}}`},
+		{httpapi.List("api_keys", []video{}, 0, nil),
+			`{"status":"success","data":{"api_keys":[],"total":0}}`},
+		{httpapi.CursorList("events", []video{{"a"}}, "eyJpZCI6NDJ9", httpapi.Page{Limit: 25}),
+			`{"status":"success","data":{"events":[{"id":"a"}],"next_cursor":"eyJpZCI6NDJ9"},"query":{"offset":0,"limit":25}}`},
+		{httpapi.CursorList("events", []video(nil), "", nil),
+			`{"status":"success","data":{"events":[]}}`},
+	} {
+		w := httptest.NewRecorder()
+		if err := httpapi.WriteJSON(w, 200, tc.envelope); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(w.Body.String()); got != tc.want {
+			t.Errorf("body\n got %s\nwant %s", got, tc.want)
+		}
 	}
 }
