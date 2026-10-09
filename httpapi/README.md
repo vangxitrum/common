@@ -75,9 +75,10 @@ api.GET("/videos/:id", ginapi.Cache(httpapi.CachePolicy{Type: httpapi.Revalidate
 
 | Helper (echoapi and ginapi) | Does |
 | --- | --- |
-| `OK`, `Created`, `List(c, items, meta)` | The success envelope; a nil list is `[]`, never `null` |
+| `OK`, `Created` | The success envelope |
+| `List(c, "videos", items, total, query)`, `CursorList(c, key, items, next, query)` | One page in aioz-stream's shape: items under their name and `total` (or `next_cursor`) in `data`, and beside it `query` as served, defaults applied; a nil list is `[]`, never `null` |
 | `Send(c, status, httpapi.Message("..."))` | A success with only a message for a person; `Success(v).WithMessage("...")` for both |
-| `Page(c, httpapi.PageConfig{})` | `offset`/`limit`/`cursor`; default 20, max 100; over the max is a 400, not a silent clamp |
+| `Page(c, httpapi.PageConfig{})` | `offset`/`limit`/`cursor`, as aioz-stream reads them: default 25, a non-positive limit is the default; over 100, a bad integer or a negative offset is a 400 (`limit-too-large`, `invalid-limit`, `invalid-offset`) |
 | `Bind(c, &dto)` | Strict JSON: must be `application/json` (415), one value, no unknown fields (400 naming the field); the parser's text never reaches the client |
 | `Cache(policy)`, `NoStore()` | The route's cache policy; an invalid policy panics at registration |
 | `CheckETag(c, etag)` | Sets `ETag`; answers 304 when `If-None-Match` matches |
@@ -88,8 +89,8 @@ api.GET("/videos/:id", ginapi.Cache(httpapi.CachePolicy{Type: httpapi.Revalidate
 {"status":"success","data":{"id":"v1"}}
 {"status":"success","message":"password changed"}
 {"status":"success","message":"video published","data":{"id":"v1"}}
-{"status":"success","data":[...],"metadata":{"offset":0,"limit":20,"total":53}}
-{"status":"success","data":[...],"metadata":{"limit":20,"next_cursor":"..."}}
+{"status":"success","data":{"videos":[...],"total":53},"query":{"offset":0,"limit":25}}
+{"status":"success","data":{"events":[...],"next_cursor":"..."},"query":{"offset":0,"limit":25}}
 {"status":"error","reason":"video-not-found","message":"no such video","request_id":"..."}
 {"status":"error","reason":"unknown-field","message":"...","request_id":"...","details":[{"field":"nam","reason":"unknown-field"}]}
 ```

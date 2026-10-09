@@ -8,8 +8,8 @@
 //
 //	GET  /v1/items/:id   id "missing": apierr.NotFound("item-not-found", "no such item");
 //	                     else OK({"id": id})
-//	GET  /v1/items       Page(PageConfig{}); List of two items {"id":"a"},{"id":"b"}
-//	                     with page.Metadata(53)
+//	GET  /v1/items       Page(PageConfig{}); two items {"id":"a"},{"id":"b"}
+//	                     as List("items", items, 53, page)
 //	GET  /v1/cached      Cache(Revalidate); CheckETag(ETag("v1")) or OK({"v":1})
 //	GET  /v1/public      Cache(Public, MaxAge 5m); OK({"v":1})
 //	GET  /v1/public-fail Cache(Public, MaxAge 5m); apierr.Conflict("busy", "try later")
@@ -149,15 +149,23 @@ var checks = []check{
 		},
 	},
 	{
-		"list with metadata",
+		"a list is the items under their name, the total and the query",
 		request{method: "GET", path: "/v1/items?offset=10&limit=2"},
 		expect{
 			status: 200,
-			body:   `{"status":"success","data":[{"id":"a"},{"id":"b"}],"metadata":{"offset":10,"limit":2,"total":53}}`,
+			body:   `{"status":"success","data":{"items":[{"id":"a"},{"id":"b"}],"total":53},"query":{"offset":10,"limit":2}}`,
 		},
 	},
 	{
-		"limit over the maximum is refused",
+		"no limit is the default of 25",
+		request{method: "GET", path: "/v1/items"},
+		expect{
+			status: 200,
+			body:   `{"status":"success","data":{"items":[{"id":"a"},{"id":"b"}],"total":53},"query":{"offset":0,"limit":25}}`,
+		},
+	},
+	{
+		"a limit over the maximum is refused",
 		request{
 			method:  "GET",
 			path:    "/v1/items?limit=1000",
@@ -168,6 +176,7 @@ var checks = []check{
 			body:   `{"status":"error","reason":"limit-too-large","message":"limit must be at most 100","request_id":"r"}`,
 		},
 	},
+
 	{
 		"offset with cursor is refused",
 		request{
