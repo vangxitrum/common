@@ -69,7 +69,7 @@ dropped**.
 ## The defaults channel
 
 `channel` is separate from `Release` and is the one thing still worth setting
-explicitly. It selects which [`config`](../../config/README.md) struct tags
+explicitly. It selects which [`config`](../config/README.md) struct tags
 apply - `devDefault` or `releaseDefault` - and that is a deliberate choice about
 how the binary should behave, not an observation about how it was built. `make
 build` leaves it at `dev`; a Dockerfile or a release job passes

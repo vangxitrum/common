@@ -38,11 +38,11 @@ ginapi.Setup(r, log, stack)
 | # | What | Why there |
 | --- | --- | --- |
 | 1 | Client IP from the trusted proxies | Everything after logs and limits by the real address |
-| 2 | Request id: the caller's when sane (1-128 of `A-Za-z0-9-_.:`), else a UUIDv7 | On the response, the context and every `httpclient` call made while serving |
+| 2 | Request id: the caller's when sane (1-128 of `A-Za-z0-9-_.:`), else a UUIDv7 | On the response, the context and every `httpclient` call made while serving; always in `Access-Control-Expose-Headers`, so a frontend on an allowed origin can read it |
 | 3 | `httpsec` headers and CORS | A preflight to any path is answered; every response has the headers, `Cache-Control: no-store` by default |
 | 4 | Access log | Sees the status the error renderer finally wrote; aioz-stream's request line, below |
 | 5 | Panic recovery | A panic is a classified 500, not a dead process |
-| 6 | Body limit | `Content-Length` over it is refused before reading; an undeclared body fails at the limit; both are a 413 |
+| 6 | Body limit | Fixed at the first read, so a route's `BodyLimit` can still change it: a `Content-Length` over it fails before anything is read, an undeclared body fails at the limit; both are a 413 |
 | 7 | Per-route metrics | Tagged by route pattern, never the raw path |
 
 ```yaml
@@ -52,6 +52,37 @@ api:
   cors:
     allowed-origins: [https://app.aioz.io]
 ```
+
+### What a service can change
+
+What a client sees is fixed: the envelope, the error body, `reason`, the
+request id, the security headers and CORS have no switch, because a standard
+every service can bend is not a standard. What differs between services is how
+the stack runs, and `Setup` takes options for that:
+
+```go
+echoapi.Setup(e, log, stack,
+    httpapi.SkipLog("/health", "/ready"), // out of the access log unless they fail with a 5xx
+)
+```
+
+| Option | Does |
+| --- | --- |
+| `SkipLog(paths...)` | Leaves these exact paths out of the access log unless the status is 5xx, so a load balancer's probe does not bury real traffic. They still count in the metrics. |
+| `WithoutAccessLog()` | No access log, for a service that writes its own. Server faults are still logged with their cause. |
+| `WithoutRecovery()` | No panic recovery, for one that installs its own, for example to report to an error tracker. Return `httpapi.Recovered(v)` from it to keep the standard 500. |
+| `WithoutMetrics()` | No per-route metrics, for one that records its own. |
+
+A route whose bodies are a different size from the stack's sets its own limit:
+
+```go
+api.POST("/videos/upload", upload, echoapi.BodyLimit(512<<20))           // echo
+api.POST("/videos/upload", ginapi.BodyLimit(512<<20), ginapi.Handle(upload)) // gin
+api.POST("/webhooks/stripe", ginapi.BodyLimit(64<<10), ginapi.Handle(hook))  // lower works too
+```
+
+A limit of zero or less panics at registration. `httpapi.SetBodyLimit` is the
+same for a plain `net/http` handler.
 
 ## Handlers
 
@@ -80,6 +111,8 @@ api.GET("/videos/:id", ginapi.Cache(httpapi.CachePolicy{Type: httpapi.Revalidate
 | `Send(c, status, httpapi.Message("..."))` | A success with only a message for a person; `Success(v).WithMessage("...")` for both |
 | `Page(c, httpapi.PageConfig{})` | `offset`/`limit`/`cursor`, as aioz-stream reads them: default 25, a non-positive limit is the default; over 100, a bad integer or a negative offset is a 400 (`limit-too-large`, `invalid-limit`, `invalid-offset`) |
 | `Bind(c, &dto)` | Strict JSON: must be `application/json` (415), one value, no unknown fields (400 naming the field); the parser's text never reaches the client |
+| `Bind(c, &dto, httpapi.AllowUnknownFields())` | The same, but fields `dto` does not have are ignored, for clients that may send a field before the server knows it (a mobile app released ahead of the API). Strict stays the default because it is what catches a misspelled field. |
+| `BodyLimit(n)` | The route's body limit in place of the stack's, higher or lower |
 | `Cache(policy)`, `NoStore()` | The route's cache policy; an invalid policy panics at registration |
 | `CheckETag(c, etag)` | Sets `ETag`; answers 304 when `If-None-Match` matches |
 
@@ -144,7 +177,7 @@ nanoseconds, a content hash - never from the rendered body.
 The adapters import `httpapi/internal/conformance`, the suite both must pass:
 the same requests, the same statuses, headers and bodies. A change to either
 adapter, or to the core, runs it for both (`make test-adapters`, and the
-`adapters` CI job).
+`modules` CI job).
 
 ### Releasing
 

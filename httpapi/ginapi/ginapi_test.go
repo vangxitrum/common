@@ -2,6 +2,7 @@ package ginapi_test
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestConformance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	logs := &conformance.Logs{}
-	ginapi.Setup(r, conformance.Logger(logs), conformance.Stack(t))
+	ginapi.Setup(r, conformance.Logger(logs), conformance.Stack(t), conformance.Options...)
 
 	v1 := r.Group("/v1")
 	v1.GET("/items/:id", ginapi.Handle(func(c *gin.Context) error {
@@ -88,6 +89,58 @@ func TestConformance(t *testing.T) {
 		return ginapi.Created(c, in)
 	}))
 
+	v1.POST("/lenient", ginapi.Handle(func(c *gin.Context) error {
+		var in struct {
+			Name string `json:"name"`
+		}
+		if err := ginapi.Bind(c, &in, httpapi.AllowUnknownFields()); err != nil {
+			return err
+		}
+		return ginapi.Created(c, in)
+	}))
+	v1.POST("/upload", ginapi.BodyLimit(conformance.UploadLimit), ginapi.Handle(func(c *gin.Context) error {
+		n, err := io.Copy(io.Discard, c.Request.Body)
+		if err != nil {
+			return err
+		}
+		return ginapi.OK(c, map[string]int64{"bytes": n})
+	}))
+	v1.POST("/webhook", ginapi.BodyLimit(conformance.WebhookLimit), ginapi.Handle(func(c *gin.Context) error {
+		var in struct {
+			Name string `json:"name"`
+		}
+		if err := ginapi.Bind(c, &in); err != nil {
+			return err
+		}
+		return ginapi.Created(c, in)
+	}))
+	r.GET("/health", ginapi.Handle(func(c *gin.Context) error {
+		return ginapi.OK(c, map[string]bool{"ok": true})
+	}))
+
 	conformance.Run(t, r)
 	conformance.RunLogs(t, r, logs)
+}
+
+func TestWithout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	logs := &conformance.Logs{}
+	ginapi.Setup(r, conformance.Logger(logs), conformance.Stack(t),
+		httpapi.WithoutAccessLog(), httpapi.WithoutRecovery(), httpapi.WithoutMetrics())
+	r.GET("/v1/items/:id", ginapi.Handle(func(c *gin.Context) error {
+		return ginapi.OK(c, map[string]string{"id": c.Param("id")})
+	}))
+	r.GET("/v1/panic", ginapi.Handle(func(c *gin.Context) error { panic("boom") }))
+
+	conformance.RunWithout(t, r, logs)
+}
+
+func TestBodyLimitRejectsANonPositiveLimit(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("BodyLimit(0) did not panic")
+		}
+	}()
+	ginapi.BodyLimit(0)
 }

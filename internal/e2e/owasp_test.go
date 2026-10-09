@@ -289,12 +289,8 @@ func requireOWASPHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
 	require.Equal(t, "nosniff", h.Get("X-Content-Type-Options"), rec.Code)
 	require.Equal(t, "DENY", h.Get("X-Frame-Options"), rec.Code)
 	require.Equal(t, "no-store", h.Get("Cache-Control"), rec.Code)
-	require.Contains(
-		t,
-		h.Get("Strict-Transport-Security"),
-		"max-age=",
-		rec.Code,
-	)
+	// HSTS is opt-in until every host under ours serves HTTPS.
+	require.Empty(t, h.Get("Strict-Transport-Security"), rec.Code)
 	require.NotEmpty(t, h.Get("Content-Security-Policy"), rec.Code)
 }
 

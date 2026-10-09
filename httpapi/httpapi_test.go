@@ -4,16 +4,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpsec"
 )
 
 func TestCacheControl(t *testing.T) {
@@ -292,6 +295,96 @@ func TestListIsAiozStreamShape(t *testing.T) {
 		}
 		if got := strings.TrimSpace(w.Body.String()); got != tc.want {
 			t.Errorf("body\n got %s\nwant %s", got, tc.want)
+		}
+	}
+}
+
+func TestSetBodyLimitAfterTheBodyIsReadFails(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", strings.NewReader("abc"))
+	w := httptest.NewRecorder()
+	if err := httpapi.LimitBody(w, r, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Body.Read(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := httpapi.SetBodyLimit(w, r, 100); err == nil {
+		t.Fatal("changing the limit of a body already being read succeeded")
+	}
+}
+
+func TestSetBodyLimitBoundsAnUnboundedBody(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", strings.NewReader("abcdef"))
+	r.ContentLength = -1
+	if err := httpapi.SetBodyLimit(httptest.NewRecorder(), r, 3); err != nil {
+		t.Fatal(err)
+	}
+	_, err := io.ReadAll(r.Body)
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("read error %v, want *http.MaxBytesError", err)
+	}
+}
+
+func TestSetBodyLimitRefusesANonPositiveLimit(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", strings.NewReader("a"))
+	if err := httpapi.SetBodyLimit(httptest.NewRecorder(), r, 0); err == nil {
+		t.Fatal("a zero limit was accepted")
+	}
+}
+
+func TestLimitBodyLeavesNoBodyAlone(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	if err := httpapi.LimitBody(httptest.NewRecorder(), r, 10); err != nil {
+		t.Fatal(err)
+	}
+	if r.Body != http.NoBody {
+		t.Fatalf("body %T, want http.NoBody", r.Body)
+	}
+}
+
+func TestOptionsLogged(t *testing.T) {
+	o := httpapi.NewOptions(httpapi.SkipLog("/health"))
+	for _, tc := range []struct {
+		path   string
+		status int
+		want   bool
+	}{
+		{"/health", 200, false},
+		{"/health", 404, false},
+		{"/health", 503, true},
+		{"/health/deep", 200, true},
+		{"/v1/items", 200, true},
+	} {
+		if got := o.Logged(tc.path, tc.status); got != tc.want {
+			t.Errorf("Logged(%q, %d) = %v, want %v", tc.path, tc.status, got, tc.want)
+		}
+	}
+	if d := httpapi.NewOptions(); !d.AccessLog() || !d.Recovery() || !d.Metrics() {
+		t.Error("the default leaves something out")
+	}
+}
+
+func TestNewStackExposesTheRequestIDOnce(t *testing.T) {
+	const origin = "https://app.example.com"
+	for _, exposed := range [][]string{nil, {"ETag"}, {"x-request-id"}} {
+		configured := slices.Clone(exposed)
+		stack, err := httpapi.NewStack(httpapi.Config{
+			CORS: httpsec.CORSConfig{AllowedOrigins: []string{origin}, ExposedHeaders: configured},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(configured, exposed) {
+			t.Errorf("the caller's ExposedHeaders became %v", configured)
+		}
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Origin", origin)
+		h := http.Header{}
+		stack.CORS.Handle(h, r)
+		got := h.Get("Access-Control-Expose-Headers")
+		if n := strings.Count(strings.ToLower(got), "x-request-id"); n != 1 {
+			t.Errorf("configured %v: Access-Control-Expose-Headers %q names the request id %d times", exposed, got, n)
 		}
 	}
 }

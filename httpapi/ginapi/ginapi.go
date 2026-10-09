@@ -36,21 +36,30 @@ const clientIPKey = "httpapi.client_ip"
 // rendering, panic recovery, body limit, per-route metrics. Unrouted paths
 // and unsupported methods are answered by the same error renderer.
 //
+// opts leave out the access log, the panic recovery or the metrics, or keep
+// some paths out of the access log; see httpapi.Option. A route changes the
+// body limit with BodyLimit.
+//
 // gin's own client-IP guess is switched off; read the address with ClientIP.
-func Setup(r *gin.Engine, log *slog.Logger, stack *httpapi.Stack) {
+func Setup(r *gin.Engine, log *slog.Logger, stack *httpapi.Stack, opts ...httpapi.Option) {
+	o := httpapi.NewOptions(opts...)
 	_ = r.SetTrustedProxies(nil)
 	r.ForwardedByClientIP = false
 	r.HandleMethodNotAllowed = true
 
-	r.Use(
-		requestID,
-		security(stack),
-		accessLog(log, stack),
-		renderErrors(log),
-		recoverPanic,
-		bodyLimit(stack.BodyLimit),
-		metrics,
-	)
+	chain := []gin.HandlerFunc{requestID, security(stack)}
+	if o.AccessLog() {
+		chain = append(chain, accessLog(log, stack, o))
+	}
+	chain = append(chain, renderErrors(log))
+	if o.Recovery() {
+		chain = append(chain, recoverPanic)
+	}
+	chain = append(chain, bodyLimit(stack.BodyLimit))
+	if o.Metrics() {
+		chain = append(chain, metrics)
+	}
+	r.Use(chain...)
 	r.NoRoute(
 		func(c *gin.Context) { abort(c, httpapi.FromStatus(http.StatusNotFound, "")) },
 	)
@@ -84,10 +93,13 @@ func requestID(c *gin.Context) {
 	c.Next()
 }
 
-func accessLog(log *slog.Logger, stack *httpapi.Stack) gin.HandlerFunc {
+func accessLog(log *slog.Logger, stack *httpapi.Stack, o httpapi.Options) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
+		if !o.Logged(c.Request.URL.Path, c.Writer.Status()) {
+			return
+		}
 		var err error
 		if last := c.Errors.Last(); last != nil {
 			err = last.Err
@@ -181,6 +193,22 @@ func Handle(fn func(c *gin.Context) error) gin.HandlerFunc {
 	}
 }
 
+// BodyLimit sets a route's request body limit in bytes, in place of the
+// stack's: higher for an upload, lower for a webhook. A limit of zero or less
+// is a programming error found when routes are registered, so it panics.
+func BodyLimit(limit int64) gin.HandlerFunc {
+	if limit <= 0 {
+		panic(httpapi.Error.Errorf("body limit must be positive, got %d", limit))
+	}
+	return func(c *gin.Context) {
+		if err := httpapi.SetBodyLimit(c.Writer, c.Request, limit); err != nil {
+			abort(c, err)
+			return
+		}
+		c.Next()
+	}
+}
+
 // Cache applies a route's cache policy. An invalid policy is a programming
 // error found when routes are registered, so it panics.
 func Cache(policy httpapi.CachePolicy) gin.HandlerFunc {
@@ -206,12 +234,10 @@ func CheckETag(c *gin.Context, etag string) bool {
 	return true
 }
 
-// Bind decodes a JSON body strictly; see httpapi.DecodeJSON.
-func Bind(
-	c *gin.Context,
-	v any,
-) error {
-	return httpapi.DecodeJSON(c.Request, v)
+// Bind decodes a JSON body strictly, unless opts loosen it; see
+// httpapi.DecodeJSON.
+func Bind(c *gin.Context, v any, opts ...httpapi.DecodeOption) error {
+	return httpapi.DecodeJSON(c.Request, v, opts...)
 }
 
 // Page reads offset, limit and cursor; see httpapi.ParsePage.

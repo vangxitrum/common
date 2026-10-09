@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -62,22 +63,68 @@ func RequestIDFrom(
 	return httpclient.RequestID(ctx)
 }
 
-// LimitBody bounds r's body at limit bytes. A declared Content-Length over the
-// limit is refused before anything is read; an undeclared one fails the first
-// read past the limit, which Render turns into a 413.
+// LimitBody bounds r's body at limit bytes. The limit takes hold at the first
+// read, so a route can still change it with SetBodyLimit after the stack has
+// run: a declared Content-Length over the limit fails that read before
+// anything is read, and an undeclared one fails the first read past the
+// limit. Render turns either into a 413. A limit of zero or less leaves the
+// body unbounded.
 func LimitBody(w http.ResponseWriter, r *http.Request, limit int64) error {
-	if limit <= 0 || r.Body == nil {
+	if limit <= 0 || r.Body == nil || r.Body == http.NoBody {
 		return nil
 	}
-	if r.ContentLength > limit {
-		return FromStatus(
-			http.StatusRequestEntityTooLarge,
-			"request body too large",
-		)
+	r.Body = &boundedBody{
+		w:      w,
+		body:   r.Body,
+		length: r.ContentLength,
+		limit:  limit,
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	return nil
 }
+
+// SetBodyLimit replaces the limit LimitBody put on r's body, for a route whose
+// bodies are larger or smaller than the stack's: an upload, or a webhook that
+// should never be large. It must run before anything reads the body, and
+// fails if something already has. A body LimitBody never bounded is bounded
+// now.
+func SetBodyLimit(w http.ResponseWriter, r *http.Request, limit int64) error {
+	if limit <= 0 {
+		return Error.Errorf("body limit must be positive, got %d", limit)
+	}
+	b, ok := r.Body.(*boundedBody)
+	if !ok {
+		return LimitBody(w, r, limit)
+	}
+	if b.reader != nil {
+		return Error.Errorf("body limit changed after the body was read")
+	}
+	b.limit = limit
+	return nil
+}
+
+// boundedBody is a request body whose limit is fixed at its first read rather
+// than when the stack wraps it. The stack runs before a route's own
+// middleware, and http.MaxBytesReader cannot be loosened once applied, so an
+// eager limit would let a route only ever lower it.
+type boundedBody struct {
+	w      http.ResponseWriter
+	body   io.ReadCloser
+	length int64
+	limit  int64
+	reader io.ReadCloser // set at the first read
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.reader == nil {
+		if b.length > b.limit {
+			return 0, &http.MaxBytesError{Limit: b.limit}
+		}
+		b.reader = http.MaxBytesReader(b.w, b.body, b.limit)
+	}
+	return b.reader.Read(p)
+}
+
+func (b *boundedBody) Close() error { return b.body.Close() }
 
 // Recovered turns a recovered panic into a classified 500, carrying the stack
 // for LogError. Call it from a deferred recover.

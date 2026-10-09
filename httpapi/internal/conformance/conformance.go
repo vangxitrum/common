@@ -19,6 +19,13 @@
 //	POST /v1/password    Send(200, Message("password changed"))
 //	POST /v1/publish     Send(201, Success({"id":"v1"}).WithMessage("video published"))
 //	POST /v1/echo        Bind into struct{Name string `json:"name"`}; Created(it)
+//	POST /v1/lenient     the same, with Bind(..., httpapi.AllowUnknownFields())
+//	POST /v1/upload      BodyLimit(UploadLimit); read the whole body and
+//	                     OK({"bytes": n}), or return the read error
+//	POST /v1/webhook     BodyLimit(WebhookLimit); the same as /v1/echo
+//	GET  /health         OK({"ok": true})
+//
+// and passes Options to Setup.
 package conformance
 
 import (
@@ -44,6 +51,18 @@ const Origin = "https://app.example.com"
 // BodyLimit is the suite's body limit, small enough to cross in a test.
 const BodyLimit = 64
 
+// UploadLimit is the upload route's body limit, above the stack's, which a
+// route must be able to raise.
+const UploadLimit = 4 * BodyLimit
+
+// WebhookLimit is the webhook route's body limit, below the stack's.
+const WebhookLimit = 16
+
+// Options are the Setup options every adapter under test is built with: the
+// health check stays out of the access log, and so does /v1/plain unless it
+// fails, which it always does.
+var Options = []httpapi.Option{httpapi.SkipLog("/health", "/v1/plain")}
+
 // Stack is the stack every adapter under test is built with.
 func Stack(t *testing.T) *httpapi.Stack {
 	t.Helper()
@@ -65,6 +84,9 @@ type request struct {
 	path    string
 	body    string
 	headers map[string]string
+	// unsized sends the body with no Content-Length, as a chunked upload is,
+	// so only reading it can find it too large.
+	unsized bool
 }
 
 type expect struct {
@@ -119,6 +141,8 @@ var checks = []check{
 				"Cache-Control":          "no-store",
 				"X-Content-Type-Options": "nosniff",
 			},
+			// HSTS is opt-in in httpsec, and this stack leaves it off.
+			absent: []string{"Strict-Transport-Security"},
 		},
 	},
 	{
@@ -374,6 +398,126 @@ var checks = []check{
 		},
 	},
 	{
+		"an unknown field is ignored where the route allows it",
+		request{
+			method:  "POST",
+			path:    "/v1/lenient",
+			body:    `{"nam":"x","name":"y"}`,
+			headers: map[string]string{"Content-Type": "application/json"},
+		},
+		expect{
+			status: 201,
+			body:   `{"status":"success","data":{"name":"y"}}`,
+		},
+	},
+	{
+		"a route can raise the body limit above the stack's",
+		request{
+			method: "POST",
+			path:   "/v1/upload",
+			body:   strings.Repeat("x", 2*BodyLimit),
+		},
+		expect{
+			status: 200,
+			body:   fmt.Sprintf(`{"status":"success","data":{"bytes":%d}}`, 2*BodyLimit),
+		},
+	},
+	{
+		"a declared body over a raised limit is a 413",
+		request{
+			method:  "POST",
+			path:    "/v1/upload",
+			body:    strings.Repeat("x", UploadLimit+1),
+			headers: map[string]string{"X-Request-Id": "r"},
+		},
+		expect{
+			status: 413,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+		},
+	},
+	{
+		"an undeclared body over a raised limit is a 413",
+		request{
+			method:  "POST",
+			path:    "/v1/upload",
+			body:    strings.Repeat("x", UploadLimit+1),
+			headers: map[string]string{"X-Request-Id": "r"},
+			unsized: true,
+		},
+		expect{
+			status: 413,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+		},
+	},
+	{
+		"a route can lower the body limit below the stack's",
+		request{
+			method: "POST",
+			path:   "/v1/webhook",
+			body:   `{"name":"` + strings.Repeat("x", WebhookLimit) + `"}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+				"X-Request-Id": "r",
+			},
+		},
+		expect{
+			status: 413,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+		},
+	},
+	{
+		"a body within a lowered limit",
+		request{
+			method:  "POST",
+			path:    "/v1/webhook",
+			body:    `{"name":"x"}`,
+			headers: map[string]string{"Content-Type": "application/json"},
+		},
+		expect{
+			status: 201,
+			body:   `{"status":"success","data":{"name":"x"}}`,
+		},
+	},
+	{
+		"a page on an allowed origin can read the request id",
+		request{
+			method:  "GET",
+			path:    "/v1/items/1",
+			headers: map[string]string{"Origin": Origin},
+		},
+		expect{
+			status: 200,
+			headers: map[string]string{
+				"Access-Control-Allow-Origin":   Origin,
+				"Access-Control-Expose-Headers": "X-Request-Id",
+			},
+		},
+	},
+	{
+		"an error a page reads also exposes the request id",
+		request{
+			method:  "GET",
+			path:    "/v1/items/missing",
+			headers: map[string]string{"Origin": Origin},
+		},
+		expect{
+			status:  404,
+			headers: map[string]string{"Access-Control-Expose-Headers": "X-Request-Id"},
+		},
+	},
+	{
+		"another origin is told nothing",
+		request{
+			method:  "GET",
+			path:    "/v1/items/1",
+			headers: map[string]string{"Origin": "https://evil.example"},
+		},
+		expect{
+			status: 200,
+			absent: []string{"Access-Control-Allow-Origin", "Access-Control-Expose-Headers"},
+		},
+	},
+	{
 		"a preflight from an allowed origin",
 		request{
 			method: "OPTIONS",
@@ -400,6 +544,9 @@ func Run(t *testing.T, h http.Handler) {
 				body = strings.NewReader(c.req.body)
 			}
 			r := httptest.NewRequest(c.req.method, c.req.path, body)
+			if c.req.unsized {
+				r.ContentLength = -1
+			}
 			for k, v := range c.req.headers {
 				r.Header.Set(k, v)
 			}
@@ -573,4 +720,47 @@ func RunLogs(t *testing.T, h http.Handler, logs *Logs) {
 			}
 		})
 	}
+
+	t.Run("log a skipped path that succeeds is left out", func(t *testing.T) {
+		logs.records(t)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/health", nil))
+		for _, rec := range logs.records(t) {
+			if rec["group"] == "api" {
+				t.Fatalf("access record for a skipped path: %v", rec)
+			}
+		}
+	})
+}
+
+// RunWithout checks a stack set up with httpapi.WithoutAccessLog() and
+// httpapi.WithoutRecovery(), on the routes GET /v1/items/:id and GET
+// /v1/panic as Run has them: nothing writes an access record, a panic reaches
+// the caller for the service's own recovery, and the response contract is
+// unchanged.
+func RunWithout(t *testing.T, h http.Handler, logs *Logs) {
+	t.Helper()
+
+	t.Run("without the access log", func(t *testing.T) {
+		logs.records(t)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/items/42", nil))
+		if w.Code != 200 || w.Header().Get(httpapi.RequestIDHeader) == "" {
+			t.Fatalf("status %d, request id %q", w.Code, w.Header().Get(httpapi.RequestIDHeader))
+		}
+		for _, rec := range logs.records(t) {
+			if rec["group"] == "api" {
+				t.Fatalf("access record with the access log off: %v", rec)
+			}
+		}
+	})
+
+	t.Run("without recovery", func(t *testing.T) {
+		defer func() {
+			if v := recover(); v != "boom" {
+				t.Fatalf("recovered %v, want the handler's panic", v)
+			}
+		}()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/panic", nil))
+		t.Fatal("the panic was recovered with recovery off")
+	})
 }

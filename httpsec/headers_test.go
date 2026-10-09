@@ -47,13 +47,12 @@ func TestTheDefaultsAreTheOWASPSet(t *testing.T) {
 		"Permissions-Policy": {
 			"geolocation=(), camera=(), microphone=()",
 		},
-		"Referrer-Policy":           {"strict-origin-when-cross-origin"},
-		"Strict-Transport-Security": {"max-age=63072000; includeSubDomains"},
-		"X-Content-Type-Options":    {"nosniff"},
-		"X-Frame-Options":           {"DENY"},
-		"X-Xss-Protection":          {"0"},
-		"Cache-Control":             {"no-store"},
-	}, dst)
+		"Referrer-Policy":        {"strict-origin-when-cross-origin"},
+		"X-Content-Type-Options": {"nosniff"},
+		"X-Frame-Options":        {"DENY"},
+		"X-Xss-Protection":       {"0"},
+		"Cache-Control":          {"no-store"},
+	}, dst, "HSTS is opt-in, so the defaults leave it out")
 }
 
 func TestWrapSetsTheHeadersOnEveryResponse(t *testing.T) {
@@ -93,16 +92,24 @@ func TestHSTSOptions(t *testing.T) {
 		cfg  httpsec.HeadersConfig
 		want string
 	}{
+		"off by default": {
+			httpsec.HeadersConfig{},
+			"",
+		},
+		"on": {
+			httpsec.HeadersConfig{HSTS: true},
+			"max-age=63072000; includeSubDomains",
+		},
 		"a shorter max-age": {
-			httpsec.HeadersConfig{HSTSMaxAge: time.Hour},
+			httpsec.HeadersConfig{HSTS: true, HSTSMaxAge: time.Hour},
 			"max-age=3600; includeSubDomains",
 		},
 		"without subdomains": {
-			httpsec.HeadersConfig{HSTSOmitSubdomains: true},
+			httpsec.HeadersConfig{HSTS: true, HSTSOmitSubdomains: true},
 			"max-age=63072000",
 		},
 		"preload": {
-			httpsec.HeadersConfig{HSTSPreload: true},
+			httpsec.HeadersConfig{HSTS: true, HSTSPreload: true},
 			"max-age=63072000; includeSubDomains; preload",
 		},
 	} {
@@ -144,8 +151,9 @@ func TestNewHeadersRejects(t *testing.T) {
 	for name, cfg := range map[string]httpsec.HeadersConfig{
 		"a negative max-age":            {HSTSMaxAge: -time.Hour},
 		"a max-age under a second":      {HSTSMaxAge: time.Millisecond},
-		"preload without subdomains":    {HSTSPreload: true, HSTSOmitSubdomains: true},
-		"preload under a year":          {HSTSPreload: true, HSTSMaxAge: 364 * 24 * time.Hour},
+		"preload without subdomains":    {HSTS: true, HSTSPreload: true, HSTSOmitSubdomains: true},
+		"preload under a year":          {HSTS: true, HSTSPreload: true, HSTSMaxAge: 364 * 24 * time.Hour},
+		"preload with hsts off":         {HSTSPreload: true},
 		"an unknown resource policy":    {CrossOriginResourcePolicy: "none"},
 		"a line break in the policy":    {ContentSecurityPolicy: "default-src 'none'\r\nSet-Cookie: a=b"},
 		"a control character in policy": {ContentSecurityPolicy: "default-src\x00 'none'"},
@@ -171,6 +179,7 @@ func TestConfigBinds(t *testing.T) {
 		cfg.Headers.ContentSecurityPolicy,
 	)
 	require.Equal(t, "same-site", cfg.Headers.CrossOriginResourcePolicy)
+	require.False(t, cfg.Headers.HSTS)
 	require.Equal(t, 2*365*24*time.Hour, cfg.Headers.HSTSMaxAge)
 	require.False(t, cfg.Headers.HSTSOmitSubdomains)
 	require.False(t, cfg.Headers.HSTSPreload)

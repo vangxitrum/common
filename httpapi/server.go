@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
@@ -55,6 +56,7 @@ func NewStack(config Config) (*Stack, error) {
 	if err != nil {
 		return nil, Error.Wrap(err)
 	}
+	config.CORS.ExposedHeaders = exposeRequestID(config.CORS.ExposedHeaders)
 	cors, err := httpsec.NewCORS(config.CORS)
 	if err != nil {
 		return nil, Error.Wrap(err)
@@ -74,6 +76,21 @@ func NewStack(config Config) (*Stack, error) {
 	}, nil
 }
 
+// exposeRequestID adds RequestIDHeader to the headers a cross-origin page may
+// read. The stack sets it on every response, but a browser hides any header
+// outside the CORS safelist unless it is exposed, so without this a frontend
+// on another origin could not read the id of a request that succeeded - the
+// one support asks for when the data came back wrong. It is not a secret:
+// error bodies carry it already. A copy, so the caller's slice is untouched.
+func exposeRequestID(headers []string) []string {
+	for _, h := range headers {
+		if strings.EqualFold(h, RequestIDHeader) {
+			return headers
+		}
+	}
+	return append(slices.Clone(headers), RequestIDHeader)
+}
+
 // ClientIP is the address the trusted proxies saw, or "" when there is none.
 func (s *Stack) ClientIP(r *http.Request) string {
 	if ip := s.Resolver.ClientIP(r); ip.IsValid() {
@@ -82,11 +99,30 @@ func (s *Stack) ClientIP(r *http.Request) string {
 	return ""
 }
 
+// DecodeOption loosens one rule of DecodeJSON.
+type DecodeOption func(*decodeOptions)
+
+type decodeOptions struct {
+	allowUnknownFields bool
+}
+
+// AllowUnknownFields accepts body fields v does not have and ignores them,
+// for an endpoint whose clients may send a field before the server knows it,
+// such as a mobile app released ahead of the API. The default refuses them,
+// which is what catches a misspelled field.
+func AllowUnknownFields() DecodeOption {
+	return func(o *decodeOptions) { o.allowUnknownFields = true }
+}
+
 // DecodeJSON reads a JSON request body into v, strictly: the body must be
-// declared as JSON, be one JSON value, and name only fields v has. Each
-// failure is a classified 400 or 415 the client can act on, never the parser's
-// own text.
-func DecodeJSON(r *http.Request, v any) error {
+// declared as JSON, be one JSON value, and name only fields v has, unless
+// AllowUnknownFields says otherwise. Each failure is a classified 400 or 415
+// the client can act on, never the parser's own text.
+func DecodeJSON(r *http.Request, v any, opts ...DecodeOption) error {
+	var o decodeOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if mediaType, _, err := mime.ParseMediaType(
 		r.Header.Get("Content-Type"),
 	); err != nil ||
@@ -98,7 +134,9 @@ func DecodeJSON(r *http.Request, v any) error {
 		)
 	}
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	if !o.allowUnknownFields {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(v); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {

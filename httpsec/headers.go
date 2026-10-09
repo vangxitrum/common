@@ -11,6 +11,7 @@ import (
 type HeadersConfig struct {
 	ContentSecurityPolicy     string        `help:"Content-Security-Policy; the default suits an API that serves no HTML"                       default:"default-src 'none'; frame-ancestors 'none'"`
 	CrossOriginResourcePolicy string        `help:"Cross-Origin-Resource-Policy: same-site, same-origin or cross-origin"                        default:"same-site"`
+	HSTS                      bool          `help:"send Strict-Transport-Security; turn on once this host and every host under it serve HTTPS only" default:"false"`
 	HSTSMaxAge                time.Duration `help:"Strict-Transport-Security max-age"                                                           default:"17520h"`
 	HSTSOmitSubdomains        bool          `help:"leave includeSubDomains out of Strict-Transport-Security"                                    default:"false"`
 	HSTSPreload               bool          `help:"add preload to Strict-Transport-Security; needs subdomains and a max-age of at least a year" default:"false"`
@@ -31,9 +32,13 @@ type Headers struct {
 
 // NewHeaders validates config and computes the header set.
 //
-// Strict-Transport-Security is always sent: a browser ignores it over plain
-// HTTP (RFC 6797 section 8.1), so there is nothing to switch off in
-// development, and a switch would be left off in production.
+// Strict-Transport-Security is sent only when HSTS is on. It is off by
+// default for now: a browser that sees it refuses plain HTTP to this host,
+// and with includeSubDomains to every host under it, for the whole max-age -
+// two years by default - and nothing the server says later shortens that for
+// a browser that already has it. Turn it on per service once every host it
+// covers serves HTTPS only. The HSTS settings are validated either way, so a
+// bad value is found before it is switched on.
 func NewHeaders(config HeadersConfig) (*Headers, error) {
 	if config.ContentSecurityPolicy == "" {
 		config.ContentSecurityPolicy = defaultCSP
@@ -65,6 +70,9 @@ func NewHeaders(config HeadersConfig) (*Headers, error) {
 			config.HSTSMaxAge,
 		)
 	}
+	if config.HSTSPreload && !config.HSTS {
+		return nil, Error.Errorf("hsts preload is set but hsts is off")
+	}
 	if config.HSTSPreload &&
 		(config.HSTSOmitSubdomains || config.HSTSMaxAge < preloadMinMaxAge) {
 		return nil, Error.Errorf(
@@ -89,13 +97,15 @@ func NewHeaders(config HeadersConfig) (*Headers, error) {
 		{"Cross-Origin-Resource-Policy", config.CrossOriginResourcePolicy},
 		{"Permissions-Policy", "geolocation=(), camera=(), microphone=()"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
-		{"Strict-Transport-Security", hsts},
 		{"X-Content-Type-Options", "nosniff"},
 		{"X-Frame-Options", "DENY"},
 		// 0, not 1: the old XSS auditors it controlled could be abused to
 		// leak data, and no current browser has one.
 		{"X-Xss-Protection", "0"},
 	}}
+	if config.HSTS {
+		h.set = append(h.set, [2]string{"Strict-Transport-Security", hsts})
+	}
 	if !config.AllowCaching {
 		h.set = append(h.set, [2]string{"Cache-Control", "no-store"})
 	}
