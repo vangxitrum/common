@@ -54,6 +54,23 @@ test:
     - !reference [.aioz-go-private, before_script]
     - !reference [.aioz-test, before_script]
 
+# The framework adapters, httpapi/echoapi and httpapi/ginapi, are modules of
+# their own so a service on one framework never builds the other, and so gin's
+# dependencies (quic-go 0.59) cannot break depin's libp2p in this module. The
+# shared lint and test jobs run from the root, where `./...` stops at a nested
+# go.mod, so this job tests and vets each adapter module. Their shared
+# conformance suite is what keeps the two answering byte for byte alike.
+adapters:
+  extends:
+    - .aioz-rules
+    - .aioz-test
+  stage: test
+  before_script:
+    - !reference [.aioz-go-private, before_script]
+    - !reference [.aioz-test, before_script]
+  script:
+    - make test-adapters
+
 # Compile, tests included, for a 32-bit target: an untyped constant that fits
 # int only on 64-bit (v0.3.2's ParseRetryAfter) otherwise ships.
 #

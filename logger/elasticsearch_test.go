@@ -220,6 +220,29 @@ func TestElasticsearchSink_ParsesApiRequestLine(t *testing.T) {
 		doc["log"].(map[string]any)["extra"].(map[string]any)["request_id"])
 }
 
+// aioz-stream's request line names a method in three colored letters (PST,
+// PTC, DEL, so the columns line up), and httpapi writes the same line. Those
+// are what reach the sink, and they must still be filed as the HTTP method.
+func TestElasticsearchSink_ParsesThreeLetterMethodLabels(t *testing.T) {
+	for label, method := range map[string]string{
+		"GET": "GET", "PST": "POST", "PUT": "PUT", "PTC": "PATCH", "DEL": "DELETE",
+	} {
+		recv := newBulkRecorder(t)
+		cfg := testESConfig(recv.URL)
+		cfg.BatchSize = 1
+		sink := newElasticsearchSink(cfg)
+
+		line := "\033[92m" + label + "\033[0m status:\033[32m201\033[0m latency:012ms url:/v1/videos"
+		require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), line, map[string]any{"group": "api"}))
+		_ = sink.Close()
+
+		_, _, docs := recv.snapshot()
+		require.Len(t, docs, 1)
+		request, _ := docs[0]["http"].(map[string]any)["request"].(map[string]any)
+		require.Equal(t, method, request["method"], "label %s", label)
+	}
+}
+
 func TestElasticsearchSink_NonApiMessageIsNotParsed(t *testing.T) {
 	recv := newBulkRecorder(t)
 	cfg := testESConfig(recv.URL)

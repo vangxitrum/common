@@ -4,6 +4,35 @@
 
 ### Added
 
+**`httpapi`, with `httpapi/echoapi` and `httpapi/ginapi`: the team HTTP API
+standard as code.** One `net/http` core renders the success envelope
+(`{"status":"success","data":...,"metadata":...}`) and the error body
+(`{"status":"error","reason","message","request_id","details"}`) from
+`apierr`, so a 5xx never carries its cause and an error is never cached. A
+success may carry a `message` for a person, alone (`httpapi.Message`) or with
+data (`Success(v).WithMessage`); `data` and `message` are omitted when empty,
+except a list's `data`, which is always `[]` at least.
+`ParsePage` reads `offset`/`limit`/`cursor` with a default of 20 and a hard
+maximum of 100, refusing rather than clamping. `CachePolicy` (public, private,
+revalidate, no-store) sets `Cache-Control` and `Vary`; `ETag`, `NotModified`
+and `CheckETag` answer `If-None-Match` with a 304 by RFC 9110's weak
+comparison. `DecodeJSON` is strict: 415 for a body that is not JSON, a 400
+naming an unknown field, never the parser's text. `RequestID` keeps a sane
+caller id and puts it on the context where `httpclient` sends it onward.
+
+`echoapi.Setup` and `ginapi.Setup` install one stack in one order - client IP,
+request id, `httpsec` headers and CORS, access log, recovery, body limit,
+metrics - and the same helpers (`OK`, `Created`, `List`, `Send`, `Page`, `Bind`,
+`Cache`, `NoStore`, `CheckETag`; `ginapi.Handle` for handlers that return an
+error). The access log is aioz-stream's request line - `GET status:200
+latency:012ms url:/v1/videos/42` in the group `api`, colored as aioz-stream
+colors it (`request-log-plain` turns that off) - so the logger's sinks parse it
+and existing dashboards keep working; the url never includes the query string. The adapters are nested modules, so an echo service never builds gin,
+and gin's quic-go 0.59 stays out of this module, where it broke `depin`'s
+libp2p. A shared conformance suite runs against both; the `adapters` CI job
+and `make test-adapters` run it.
+
+
 **`depin.Storage` gains `DownloadRange`, `CreateLocalTicket` and `Account`.**
 `DownloadRange(ctx, fileID, w, offset, length)` writes the plaintext bytes
 `[offset, offset+length)`, so a caller that packs thumbnail sizes, HLS
@@ -126,6 +155,11 @@ wanted, and a `Critical` with no error filed a call stack as
 should move to `log.origin.stack_trace`.**
 
 ### Fixed
+
+**The Elasticsearch sink files `PST`, `PTC` and `DEL` as POST, PATCH and
+DELETE.** The request line names those methods in three letters, and the sink
+recognised only full method names, so every POST, PATCH and DELETE request
+reached Kibana with no `http.request.method`.
 
 **`lrucache.Add` grew the cache without bound and broke `Capacity`.** When it
 evicted, it deleted the map entry but left the list element in place, so the

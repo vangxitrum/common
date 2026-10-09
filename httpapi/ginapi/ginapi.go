@@ -1,0 +1,252 @@
+// Package ginapi is httpapi for gin: the standard middleware stack, the error
+// renderer and the response helpers, so a gin service follows the team HTTP
+// API standard without writing any of it.
+//
+//	stack, err := httpapi.NewStack(cfg.API)
+//	if err != nil {
+//	    return err
+//	}
+//	r := gin.New()
+//	ginapi.Setup(r, log, stack)
+//
+//	api := r.Group("/v1")
+//	api.GET("/videos/:id", ginapi.Cache(httpapi.CachePolicy{Type: httpapi.Revalidate}), ginapi.Handle(getVideo))
+//
+// gin handlers return nothing, so Handle adapts one that returns an error: the
+// error is rendered by the stack, exactly as echoapi renders it.
+package ginapi
+
+import (
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/spacemonkeygo/monkit/v3"
+
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi"
+)
+
+var mon = monkit.Package()
+
+const clientIPKey = "httpapi.client_ip"
+
+// Setup installs the standard stack on r, in the same order as echoapi:
+// client IP, request id, security headers and CORS, access log, error
+// rendering, panic recovery, body limit, per-route metrics. Unrouted paths
+// and unsupported methods are answered by the same error renderer.
+//
+// gin's own client-IP guess is switched off; read the address with ClientIP.
+func Setup(r *gin.Engine, log *slog.Logger, stack *httpapi.Stack) {
+	_ = r.SetTrustedProxies(nil)
+	r.ForwardedByClientIP = false
+	r.HandleMethodNotAllowed = true
+
+	r.Use(
+		requestID,
+		security(stack),
+		accessLog(log, stack),
+		renderErrors(log),
+		recoverPanic,
+		bodyLimit(stack.BodyLimit),
+		metrics,
+	)
+	r.NoRoute(
+		func(c *gin.Context) { abort(c, httpapi.FromStatus(http.StatusNotFound, "")) },
+	)
+	r.NoMethod(
+		func(c *gin.Context) { abort(c, httpapi.FromStatus(http.StatusMethodNotAllowed, "")) },
+	)
+}
+
+// ClientIP is the address the trusted proxies saw.
+func ClientIP(c *gin.Context) string { return c.GetString(clientIPKey) }
+
+func security(stack *httpapi.Stack) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(clientIPKey, stack.ClientIP(c.Request))
+		h := c.Writer.Header()
+		stack.Headers.Apply(h)
+		if stack.CORS.Handle(h, c.Request) {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
+
+func requestID(c *gin.Context) {
+	id := httpapi.RequestID(c.Request)
+	c.Writer.Header().Set(httpapi.RequestIDHeader, id)
+	c.Request = c.Request.WithContext(
+		httpapi.WithRequestID(c.Request.Context(), id),
+	)
+	c.Next()
+}
+
+func accessLog(log *slog.Logger, stack *httpapi.Stack) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		var err error
+		if last := c.Errors.Last(); last != nil {
+			err = last.Err
+		}
+		httpapi.LogAccess(c.Request.Context(), log, httpapi.Access{
+			Method:    c.Request.Method,
+			Path:      c.Request.URL.Path,
+			Route:     c.FullPath(),
+			Status:    c.Writer.Status(),
+			Latency:   time.Since(start),
+			Bytes:     int64(max(c.Writer.Size(), 0)),
+			RemoteIP:  stack.ClientIP(c.Request),
+			RequestID: c.Writer.Header().Get(httpapi.RequestIDHeader),
+			UserAgent: c.Request.UserAgent(),
+			Err:       err,
+			Plain:     stack.PlainLog,
+		})
+	}
+}
+
+// renderErrors writes the last error a handler recorded, unless the handler
+// had already written a response.
+func renderErrors(log *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		last := c.Errors.Last()
+		if last == nil || c.Writer.Written() {
+			return
+		}
+		requestID := c.Writer.Header().Get(httpapi.RequestIDHeader)
+		httpapi.LogError(
+			c.Request.Context(),
+			log,
+			last.Err,
+			c.FullPath(),
+			requestID,
+		)
+		_, body := httpapi.Render(last.Err, "")
+		mon.Counter("request_failures", monkit.NewSeriesTag("reason", body.Reason)).
+			Inc(1)
+		httpapi.WriteError(c.Writer, last.Err, requestID)
+	}
+}
+
+func recoverPanic(c *gin.Context) {
+	defer func() {
+		if v := recover(); v != nil {
+			if v == http.ErrAbortHandler {
+				panic(v)
+			}
+			abort(c, httpapi.Recovered(v))
+		}
+	}()
+	c.Next()
+}
+
+func bodyLimit(limit int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := httpapi.LimitBody(c.Writer, c.Request, limit); err != nil {
+			abort(c, err)
+			return
+		}
+		c.Next()
+	}
+}
+
+func metrics(c *gin.Context) {
+	start := time.Now()
+	c.Next()
+	route := c.FullPath()
+	if route == "" {
+		route = "unmatched"
+	}
+	tag := monkit.NewSeriesTag("route", route)
+	mon.DurationVal("request_duration", tag).Observe(time.Since(start))
+	mon.Counter("requests", tag).Inc(1)
+}
+
+func abort(c *gin.Context, err error) {
+	_ = c.Error(err)
+	c.Abort()
+}
+
+// Handle adapts a handler that returns an error. A returned error is rendered
+// by the stack as the standard error body.
+func Handle(fn func(c *gin.Context) error) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := fn(c); err != nil {
+			abort(c, err)
+		}
+	}
+}
+
+// Cache applies a route's cache policy. An invalid policy is a programming
+// error found when routes are registered, so it panics.
+func Cache(policy httpapi.CachePolicy) gin.HandlerFunc {
+	if err := policy.Validate(); err != nil {
+		panic(err)
+	}
+	return func(c *gin.Context) {
+		policy.Apply(c.Writer.Header())
+		c.Next()
+	}
+}
+
+// NoStore marks a route as never cached.
+func NoStore() gin.HandlerFunc { return Cache(httpapi.CachePolicy{Type: httpapi.NoStore}) }
+
+// CheckETag sets the ETag and answers 304 when the client already holds it;
+// on true the handler returns without rendering.
+func CheckETag(c *gin.Context, etag string) bool {
+	if !httpapi.CheckETag(c.Writer, c.Request, etag) {
+		return false
+	}
+	c.Writer.WriteHeaderNow()
+	return true
+}
+
+// Bind decodes a JSON body strictly; see httpapi.DecodeJSON.
+func Bind(
+	c *gin.Context,
+	v any,
+) error {
+	return httpapi.DecodeJSON(c.Request, v)
+}
+
+// Page reads offset, limit and cursor; see httpapi.ParsePage.
+func Page(c *gin.Context, config httpapi.PageConfig) (httpapi.Page, error) {
+	return httpapi.ParsePage(c.Request.URL.Query(), config)
+}
+
+// Send answers status with any success envelope, for one that carries a
+// message:
+//
+//	return Send(c, http.StatusOK, httpapi.Message("password changed"))
+//	return Send(c, http.StatusCreated, httpapi.Success(video).WithMessage("video published"))
+func Send(c *gin.Context, status int, envelope httpapi.Envelope) error {
+	return httpapi.WriteJSON(c.Writer, status, envelope)
+}
+
+// OK answers 200 with data in the success envelope.
+func OK(c *gin.Context, data any) error {
+	return httpapi.WriteJSON(c.Writer, http.StatusOK, httpapi.Success(data))
+}
+
+// Created answers 201 with data in the success envelope.
+func Created(c *gin.Context, data any) error {
+	return httpapi.WriteJSON(
+		c.Writer,
+		http.StatusCreated,
+		httpapi.Success(data),
+	)
+}
+
+// List answers 200 with one page of items and its metadata.
+func List[T any](c *gin.Context, items []T, metadata any) error {
+	return httpapi.WriteJSON(
+		c.Writer,
+		http.StatusOK,
+		httpapi.List(items, metadata),
+	)
+}

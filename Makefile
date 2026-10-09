@@ -7,7 +7,11 @@
 GOLANGCI_LINT_VERSION := v2.11.4
 GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
 
-.PHONY: lint lint-fix fmt test test-integration
+.PHONY: lint lint-fix fmt test test-adapters test-integration
+
+# Nested modules: each framework adapter is its own module, so ./... from the
+# root does not reach it.
+ADAPTERS := httpapi/echoapi httpapi/ginapi
 
 $(GOLANGCI_LINT):
 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
@@ -15,6 +19,7 @@ $(GOLANGCI_LINT):
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run ./...
+	for m in $(ADAPTERS); do (cd $$m && $(GOLANGCI_LINT) run --config $(CURDIR)/.golangci.yml ./...) || exit 1; done
 
 lint-fix: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run --fix ./...
@@ -24,6 +29,9 @@ fmt:
 
 test:
 	go test ./...
+
+test-adapters:
+	for m in $(ADAPTERS); do (cd $$m && go vet ./... && go test -race ./...) || exit 1; done
 
 # The container tests, with skipping turned off so a missing docker daemon is
 # a failure rather than a green run that tested nothing.
