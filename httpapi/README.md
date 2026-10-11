@@ -96,6 +96,19 @@ e.GET("/swagger/*", echoSwagger.WrapHandler, echoapi.ContentSecurityPolicy(https
 Every other route keeps the strict policy. See
 [`httpsec`](../httpsec/README.md#a-different-policy-for-some-routes).
 
+A route whose responses another site embeds - media a player on a customer's
+page loads with a plain `<video>`, `<img>` or `<track>` - sets
+`Cross-Origin-Resource-Policy: cross-origin` in place of the stack's
+`same-site`, which a browser refuses for a cross-site load:
+
+```go
+r.GET("/media/:id/mp4", ginapi.CrossOriginResourcePolicy("cross-origin"), ginapi.Handle(mp4)) // gin
+e.GET("/media/:id/mp4", mp4, echoapi.CrossOriginResourcePolicy("cross-origin"))               // echo
+```
+
+Pair it with a `Cache` policy when the response may be cached. See
+[`httpsec`](../httpsec/README.md#media-another-site-embeds).
+
 ## Handlers
 
 ```go

@@ -244,6 +244,29 @@ func ContentSecurityPolicy(policy string) echo.MiddlewareFunc {
 	}
 }
 
+// CrossOriginResourcePolicy sets a route's or group's
+// Cross-Origin-Resource-Policy in place of the stack's same-site, for
+// responses another site embeds: media a player on a customer's page loads
+// with a plain <video>, <img> or <track>, which a browser refuses from a
+// same-site resource whatever CORS allows.
+//
+//	e.GET("/media/:id/mp4", mp4, echoapi.CrossOriginResourcePolicy("cross-origin"))
+//
+// An invalid policy is a programming error found when routes are registered,
+// so it panics, like Cache.
+func CrossOriginResourcePolicy(policy string) echo.MiddlewareFunc {
+	corp, err := httpsec.NewCrossOriginResourcePolicy(policy)
+	if err != nil {
+		panic(err)
+	}
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			corp.Apply(c.Response().Header())
+			return next(c)
+		}
+	}
+}
+
 // Cache applies a route's cache policy. An invalid policy is a programming
 // error found when routes are registered, so it panics, like
 // regexp.MustCompile.

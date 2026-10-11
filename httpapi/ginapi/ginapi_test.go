@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -123,6 +124,10 @@ func TestConformance(t *testing.T) {
 		return ginapi.OK(c, map[string]bool{"docs": true})
 	}))
 
+	r.GET("/embed", ginapi.CrossOriginResourcePolicy("cross-origin"), ginapi.Handle(func(c *gin.Context) error {
+		return ginapi.OK(c, map[string]bool{"embed": true})
+	}))
+
 	conformance.Run(t, r)
 	conformance.RunLogs(t, r, logs)
 }
@@ -157,4 +162,47 @@ func TestContentSecurityPolicyRejectsAnInvalidPolicy(t *testing.T) {
 		}
 	}()
 	ginapi.ContentSecurityPolicy("")
+}
+
+// Setup leaves gin's own client-IP detection as gin, or the service, set it:
+// c.ClientIP() keeps working for code that already reads it. ginapi.ClientIP
+// is the stack's answer, from its own trusted proxies.
+func TestSetupKeepsGinsClientIPDetection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for name, configure := range map[string]func(*gin.Engine){
+		"gin's default": func(*gin.Engine) {},
+		"the service's own proxies": func(r *gin.Engine) {
+			if err := r.SetTrustedProxies([]string{"192.0.2.0/24"}); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		r := gin.New()
+		configure(r)
+		ginapi.Setup(r, nil, conformance.Stack(t))
+		var ginIP, stackIP string
+		r.GET("/ip", func(c *gin.Context) {
+			ginIP, stackIP = c.ClientIP(), ginapi.ClientIP(c)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/ip", nil) // from 192.0.2.1
+		req.Header.Set("X-Forwarded-For", "203.0.113.7")
+		r.ServeHTTP(httptest.NewRecorder(), req)
+
+		if ginIP != "203.0.113.7" {
+			t.Errorf("%s: c.ClientIP() = %q, want the forwarded 203.0.113.7", name, ginIP)
+		}
+		if stackIP != "192.0.2.1" {
+			t.Errorf("%s: ginapi.ClientIP = %q, want 192.0.2.1: the stack trusts no proxy", name, stackIP)
+		}
+	}
+}
+
+func TestCrossOriginResourcePolicyRejectsAnInvalidPolicy(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("CrossOriginResourcePolicy(\"cross-site\") did not panic")
+		}
+	}()
+	ginapi.CrossOriginResourcePolicy("cross-site")
 }

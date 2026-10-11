@@ -25,6 +25,7 @@
 //	POST /v1/webhook     BodyLimit(WebhookLimit); the same as /v1/echo
 //	GET  /health         OK({"ok": true})
 //	GET  /docs           ContentSecurityPolicy(httpsec.SwaggerUIPolicy); OK({"docs": true})
+//	GET  /embed          CrossOriginResourcePolicy("cross-origin"); OK({"embed": true})
 //
 // and passes Options to Setup.
 package conformance
@@ -526,6 +527,17 @@ var checks = []check{
 			headers: map[string]string{
 				"Content-Security-Policy": httpsec.SwaggerUIPolicy,
 				"X-Frame-Options":         "DENY",
+			},
+		},
+	},
+	{
+		"an embedded route has its own resource policy",
+		request{method: "GET", path: "/embed"},
+		expect{
+			status: 200,
+			headers: map[string]string{
+				"Cross-Origin-Resource-Policy": "cross-origin",
+				"X-Frame-Options":              "DENY",
 			},
 		},
 	},
