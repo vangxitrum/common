@@ -105,6 +105,10 @@ func TestConformance(t *testing.T) {
 		return echoapi.OK(c, map[string]bool{"docs": true})
 	}, echoapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy))
 
+	e.GET("/embed", func(c echo.Context) error {
+		return echoapi.OK(c, map[string]bool{"embed": true})
+	}, echoapi.CrossOriginResourcePolicy("cross-origin"))
+
 	conformance.Run(t, e)
 	conformance.RunLogs(t, e, logs)
 }
@@ -138,4 +142,13 @@ func TestContentSecurityPolicyRejectsAnInvalidPolicy(t *testing.T) {
 		}
 	}()
 	echoapi.ContentSecurityPolicy("")
+}
+
+func TestCrossOriginResourcePolicyRejectsAnInvalidPolicy(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("CrossOriginResourcePolicy(\"cross-site\") did not panic")
+		}
+	}()
+	echoapi.CrossOriginResourcePolicy("cross-site")
 }

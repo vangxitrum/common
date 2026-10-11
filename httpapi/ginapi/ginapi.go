@@ -41,11 +41,13 @@ const clientIPKey = "httpapi.client_ip"
 // some paths out of the access log; see httpapi.Option. A route changes the
 // body limit with BodyLimit.
 //
-// gin's own client-IP guess is switched off; read the address with ClientIP.
+// gin's own client-IP detection is left as gin, or the service, set it, so
+// code that reads c.ClientIP() keeps working. The stack does not use it: the
+// access log and ClientIP use the stack's trusted proxies. gin's default
+// trusts every proxy, so c.ClientIP() believes any X-Forwarded-For; set
+// r.SetTrustedProxies before relying on it for anything that matters.
 func Setup(r *gin.Engine, log *slog.Logger, stack *httpapi.Stack, opts ...httpapi.Option) {
 	o := httpapi.NewOptions(opts...)
-	_ = r.SetTrustedProxies(nil)
-	r.ForwardedByClientIP = false
 	r.HandleMethodNotAllowed = true
 
 	chain := []gin.HandlerFunc{requestID, security(stack)}
@@ -69,7 +71,9 @@ func Setup(r *gin.Engine, log *slog.Logger, stack *httpapi.Stack, opts ...httpap
 	)
 }
 
-// ClientIP is the address the trusted proxies saw.
+// ClientIP is the address the stack's trusted proxies saw, the one the access
+// log records. It can differ from c.ClientIP(), which follows gin's own
+// trusted proxies.
 func ClientIP(c *gin.Context) string { return c.GetString(clientIPKey) }
 
 func security(stack *httpapi.Stack) gin.HandlerFunc {
@@ -225,6 +229,27 @@ func ContentSecurityPolicy(policy string) gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		csp.Apply(c.Writer.Header())
+		c.Next()
+	}
+}
+
+// CrossOriginResourcePolicy sets a route's or group's
+// Cross-Origin-Resource-Policy in place of the stack's same-site, for
+// responses another site embeds: media a player on a customer's page loads
+// with a plain <video>, <img> or <track>, which a browser refuses from a
+// same-site resource whatever CORS allows.
+//
+//	r.GET("/media/:id/mp4", ginapi.CrossOriginResourcePolicy("cross-origin"), ginapi.Handle(mp4))
+//
+// An invalid policy is a programming error found when routes are registered,
+// so it panics.
+func CrossOriginResourcePolicy(policy string) gin.HandlerFunc {
+	corp, err := httpsec.NewCrossOriginResourcePolicy(policy)
+	if err != nil {
+		panic(err)
+	}
+	return func(c *gin.Context) {
+		corp.Apply(c.Writer.Header())
 		c.Next()
 	}
 }

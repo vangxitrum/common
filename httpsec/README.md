@@ -135,6 +135,24 @@ Chrome against gin-swagger v1.6.1 and echo-swagger v1.4.1.
 Keep it on the docs route: never give it to a route that renders what a user
 wrote.
 
+### Media another site embeds
+
+The default `Cross-Origin-Resource-Policy` is `same-site`, and a browser
+refuses a cross-site `<video>`, `<img>` or `<track>` load of a same-site
+response whatever CORS allows.
+Routes whose responses a player on a customer's page loads directly - a
+manifest, an mp4, a thumbnail, captions - set `cross-origin` instead:
+
+```go
+corp, err := httpsec.NewCrossOriginResourcePolicy("cross-origin")
+mux.Handle("/media/", corp.Wrap(mediaHandler)) // inside headers.Wrap, so it replaces the default
+```
+
+`httpapi`'s adapters have `ginapi.CrossOriginResourcePolicy` and
+`echoapi.CrossOriginResourcePolicy` for the same thing.
+Give it only to routes that serve something meant to be embedded: it lets any
+site load the response.
+
 ## CORS
 
 - **Empty `allowed-origins` turns CORS off.** No `Access-Control-*` header is
