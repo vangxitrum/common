@@ -32,6 +32,7 @@ handler = headers.Wrap(cors.Wrap(mux)) // net/http
 headers:
   content-security-policy: "default-src 'none'; frame-ancestors 'none'"
   cross-origin-resource-policy: same-site
+  hsts: false            # the default; see "HSTS" below before turning it on
   hsts-max-age: 17520h
 cors:
   allowed-origins: [https://app.aioz.io, https://*.aioz.io]  # empty: CORS off
@@ -79,7 +80,7 @@ In both, remove the framework's CORS middleware (`gin-contrib/cors`,
 | Header | Value | Why |
 | --- | --- | --- |
 | `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` | An API serves no HTML; a response rendered as a page can run nothing |
-| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` | Browsers refuse plain HTTP for two years |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains`, **only with `hsts: true`** | Browsers refuse plain HTTP for two years |
 | `X-Content-Type-Options` | `nosniff` | JSON is never sniffed into HTML or script |
 | `X-Frame-Options` | `DENY` | No clickjacking (older browsers; CSP covers the rest) |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | URLs, with their tokens, stay on our site |
@@ -93,14 +94,46 @@ The headers are set **before** the handler runs, so one endpoint can loosen
 one - a `Cache-Control` on a public resource - without its own middleware.
 `AllowCaching` leaves `Cache-Control` to handlers everywhere.
 
-HSTS is always sent. A browser ignores it over plain HTTP (RFC 6797 §8.1), so
-there is nothing to turn off in development - and a switch would stay off in
-production. `hsts-preload` asks browsers to ship the domain as HTTPS-only;
-it needs `includeSubDomains` and a year, and is hard to undo.
+### HSTS
+
+HSTS is **off by default for now**; `hsts: true` turns it on.
+A browser that sees the header refuses plain HTTP to this host - and, with
+`includeSubDomains`, to every host under it - for the whole max-age, two years
+by default.
+Nothing the server sends later shortens that for a browser that already has
+it, so one service sending it from a parent domain can lock users out of an
+internal host still on HTTP.
+Turn it on per service once every host it covers serves HTTPS only; start with
+a short `hsts-max-age` (for example `24h`) and raise it once nothing breaks.
+
+The HSTS settings are validated whether it is on or off, and `hsts-preload`
+with `hsts` off is refused.
+`hsts-preload` asks browsers to ship the domain as HTTPS-only; it needs
+`includeSubDomains` and a year, and is hard to undo.
 
 A service that serves HTML sets its own `content-security-policy` (start from
 `default-src 'self'; frame-ancestors 'none'`) and usually
 `cross-origin-resource-policy: same-origin`.
+
+### A different policy for some routes
+
+The default policy lets a page load nothing, which suits JSON and breaks any
+page an API serves, such as Swagger UI: its scripts, stylesheets and images
+are all refused and it renders blank.
+Give those routes their own policy instead of loosening it for every route:
+
+```go
+csp, err := httpsec.NewContentSecurityPolicy(httpsec.SwaggerUIPolicy)
+mux.Handle("/swagger/", csp.Wrap(swaggerHandler)) // inside headers.Wrap, so it replaces the default
+```
+
+`httpapi`'s adapters have `ginapi.ContentSecurityPolicy` and
+`echoapi.ContentSecurityPolicy` for the same thing.
+`SwaggerUIPolicy` loads only from this server and allows inline script and
+style, which echo-swagger's start-up script needs; it is checked in headless
+Chrome against gin-swagger v1.6.1 and echo-swagger v1.4.1.
+Keep it on the docs route: never give it to a route that renders what a user
+wrote.
 
 ## CORS
 

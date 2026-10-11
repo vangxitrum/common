@@ -19,6 +19,14 @@
 //	POST /v1/password    Send(200, Message("password changed"))
 //	POST /v1/publish     Send(201, Success({"id":"v1"}).WithMessage("video published"))
 //	POST /v1/echo        Bind into struct{Name string `json:"name"`}; Created(it)
+//	POST /v1/lenient     the same, with Bind(..., httpapi.AllowUnknownFields())
+//	POST /v1/upload      BodyLimit(UploadLimit); read the whole body and
+//	                     OK({"bytes": n}), or return the read error
+//	POST /v1/webhook     BodyLimit(WebhookLimit); the same as /v1/echo
+//	GET  /health         OK({"ok": true})
+//	GET  /docs           ContentSecurityPolicy(httpsec.SwaggerUIPolicy); OK({"docs": true})
+//
+// and passes Options to Setup.
 package conformance
 
 import (
@@ -44,6 +52,18 @@ const Origin = "https://app.example.com"
 // BodyLimit is the suite's body limit, small enough to cross in a test.
 const BodyLimit = 64
 
+// UploadLimit is the upload route's body limit, above the stack's, which a
+// route must be able to raise.
+const UploadLimit = 4 * BodyLimit
+
+// WebhookLimit is the webhook route's body limit, below the stack's.
+const WebhookLimit = 16
+
+// Options are the Setup options every adapter under test is built with: the
+// health check stays out of the access log, and so does /v1/plain unless it
+// fails, which it always does.
+var Options = []httpapi.Option{httpapi.SkipLog("/health", "/v1/plain")}
+
 // Stack is the stack every adapter under test is built with.
 func Stack(t *testing.T) *httpapi.Stack {
 	t.Helper()
@@ -65,6 +85,9 @@ type request struct {
 	path    string
 	body    string
 	headers map[string]string
+	// unsized sends the body with no Content-Length, as a chunked upload is,
+	// so only reading it can find it too large.
+	unsized bool
 }
 
 type expect struct {
@@ -115,10 +138,13 @@ var checks = []check{
 			status: 200,
 			body:   `{"status":"success","data":{"id":"42"}}`,
 			headers: map[string]string{
-				"Content-Type":           errorCT,
-				"Cache-Control":          "no-store",
-				"X-Content-Type-Options": "nosniff",
+				"Content-Type":            errorCT,
+				"Cache-Control":           "no-store",
+				"X-Content-Type-Options":  "nosniff",
+				"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 			},
+			// HSTS is opt-in in httpsec, and this stack leaves it off.
+			absent: []string{"Strict-Transport-Security"},
 		},
 	},
 	{
@@ -130,19 +156,18 @@ var checks = []check{
 		},
 		expect{
 			status: 404,
-			body:   `{"status":"error","reason":"item-not-found","message":"no such item","request_id":"req-1"}`,
+			body:   `{"status":"error","reason":"item-not-found","message":"no such item","request_id":"<generated>"}`,
 			headers: map[string]string{
-				"X-Request-Id":  "req-1",
 				"Cache-Control": "no-store",
 			},
 		},
 	},
 	{
-		"a caller's unsafe request id is replaced",
+		"a caller's request id is never used, however sane",
 		request{
 			method:  "GET",
 			path:    "/v1/items/1",
-			headers: map[string]string{"X-Request-Id": "bad id\n"},
+			headers: map[string]string{"X-Request-Id": "trace-1"},
 		},
 		expect{
 			status: 200,
@@ -173,7 +198,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"limit-too-large","message":"limit must be at most 100","request_id":"r"}`,
+			body:   `{"status":"error","reason":"limit-too-large","message":"limit must be at most 100","request_id":"<generated>"}`,
 		},
 	},
 
@@ -186,7 +211,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"offset-with-cursor","message":"use offset or cursor, not both","request_id":"r"}`,
+			body:   `{"status":"error","reason":"offset-with-cursor","message":"use offset or cursor, not both","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -231,7 +256,7 @@ var checks = []check{
 		},
 		expect{
 			status:  409,
-			body:    `{"status":"error","reason":"busy","message":"try later","request_id":"r"}`,
+			body:    `{"status":"error","reason":"busy","message":"try later","request_id":"<generated>"}`,
 			headers: map[string]string{"Cache-Control": "no-store"},
 		},
 	},
@@ -244,7 +269,7 @@ var checks = []check{
 		},
 		expect{
 			status: 500,
-			body:   `{"status":"error","reason":"internal","message":"an unexpected error occurred","request_id":"r"}`,
+			body:   `{"status":"error","reason":"internal","message":"an unexpected error occurred","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -256,7 +281,7 @@ var checks = []check{
 		},
 		expect{
 			status: 500,
-			body:   `{"status":"error","reason":"panic","message":"an unexpected error occurred","request_id":"r"}`,
+			body:   `{"status":"error","reason":"panic","message":"an unexpected error occurred","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -268,7 +293,7 @@ var checks = []check{
 		},
 		expect{
 			status:  429,
-			body:    `{"status":"error","reason":"slow-down","message":"too many requests","request_id":"r"}`,
+			body:    `{"status":"error","reason":"slow-down","message":"too many requests","request_id":"<generated>"}`,
 			headers: map[string]string{"Retry-After": "1"},
 		},
 	},
@@ -281,7 +306,7 @@ var checks = []check{
 		},
 		expect{
 			status: 404,
-			body:   `{"status":"error","reason":"route-not-found","message":"Not Found","request_id":"r"}`,
+			body:   `{"status":"error","reason":"route-not-found","message":"Not Found","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -293,7 +318,7 @@ var checks = []check{
 		},
 		expect{
 			status: 405,
-			body:   `{"status":"error","reason":"method-not-allowed","message":"Method Not Allowed","request_id":"r"}`,
+			body:   `{"status":"error","reason":"method-not-allowed","message":"Method Not Allowed","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -322,7 +347,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"unknown-field","message":"request body has a field this API does not accept","request_id":"r","details":[{"field":"nam","reason":"unknown-field"}]}`,
+			body:   `{"status":"error","reason":"unknown-field","message":"request body has a field this API does not accept","request_id":"<generated>","details":[{"field":"nam","reason":"unknown-field"}]}`,
 		},
 	},
 	{
@@ -338,7 +363,7 @@ var checks = []check{
 		},
 		expect{
 			status: 400,
-			body:   `{"status":"error","reason":"invalid-json","message":"request body is not valid JSON for this endpoint","request_id":"r"}`,
+			body:   `{"status":"error","reason":"invalid-json","message":"request body is not valid JSON for this endpoint","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -354,7 +379,7 @@ var checks = []check{
 		},
 		expect{
 			status: 415,
-			body:   `{"status":"error","reason":"unsupported-media-type","message":"request body must be application/json","request_id":"r"}`,
+			body:   `{"status":"error","reason":"unsupported-media-type","message":"request body must be application/json","request_id":"<generated>"}`,
 		},
 	},
 	{
@@ -370,7 +395,138 @@ var checks = []check{
 		},
 		expect{
 			status: 413,
-			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"r"}`,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
+		},
+	},
+	{
+		"an unknown field is ignored where the route allows it",
+		request{
+			method:  "POST",
+			path:    "/v1/lenient",
+			body:    `{"nam":"x","name":"y"}`,
+			headers: map[string]string{"Content-Type": "application/json"},
+		},
+		expect{
+			status: 201,
+			body:   `{"status":"success","data":{"name":"y"}}`,
+		},
+	},
+	{
+		"a route can raise the body limit above the stack's",
+		request{
+			method: "POST",
+			path:   "/v1/upload",
+			body:   strings.Repeat("x", 2*BodyLimit),
+		},
+		expect{
+			status: 200,
+			body:   fmt.Sprintf(`{"status":"success","data":{"bytes":%d}}`, 2*BodyLimit),
+		},
+	},
+	{
+		"a declared body over a raised limit is a 413",
+		request{
+			method:  "POST",
+			path:    "/v1/upload",
+			body:    strings.Repeat("x", UploadLimit+1),
+			headers: map[string]string{"X-Request-Id": "r"},
+		},
+		expect{
+			status: 413,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
+		},
+	},
+	{
+		"an undeclared body over a raised limit is a 413",
+		request{
+			method:  "POST",
+			path:    "/v1/upload",
+			body:    strings.Repeat("x", UploadLimit+1),
+			headers: map[string]string{"X-Request-Id": "r"},
+			unsized: true,
+		},
+		expect{
+			status: 413,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
+		},
+	},
+	{
+		"a route can lower the body limit below the stack's",
+		request{
+			method: "POST",
+			path:   "/v1/webhook",
+			body:   `{"name":"` + strings.Repeat("x", WebhookLimit) + `"}`,
+			headers: map[string]string{
+				"Content-Type": "application/json",
+				"X-Request-Id": "r",
+			},
+		},
+		expect{
+			status: 413,
+			body:   `{"status":"error","reason":"body-too-large","message":"request body too large","request_id":"<generated>"}`,
+		},
+	},
+	{
+		"a body within a lowered limit",
+		request{
+			method:  "POST",
+			path:    "/v1/webhook",
+			body:    `{"name":"x"}`,
+			headers: map[string]string{"Content-Type": "application/json"},
+		},
+		expect{
+			status: 201,
+			body:   `{"status":"success","data":{"name":"x"}}`,
+		},
+	},
+	{
+		"a page on an allowed origin can read the request id",
+		request{
+			method:  "GET",
+			path:    "/v1/items/1",
+			headers: map[string]string{"Origin": Origin},
+		},
+		expect{
+			status: 200,
+			headers: map[string]string{
+				"Access-Control-Allow-Origin":   Origin,
+				"Access-Control-Expose-Headers": "X-Request-Id",
+			},
+		},
+	},
+	{
+		"an error a page reads also exposes the request id",
+		request{
+			method:  "GET",
+			path:    "/v1/items/missing",
+			headers: map[string]string{"Origin": Origin},
+		},
+		expect{
+			status:  404,
+			headers: map[string]string{"Access-Control-Expose-Headers": "X-Request-Id"},
+		},
+	},
+	{
+		"another origin is told nothing",
+		request{
+			method:  "GET",
+			path:    "/v1/items/1",
+			headers: map[string]string{"Origin": "https://evil.example"},
+		},
+		expect{
+			status: 200,
+			absent: []string{"Access-Control-Allow-Origin", "Access-Control-Expose-Headers"},
+		},
+	},
+	{
+		"a docs route has its own content security policy",
+		request{method: "GET", path: "/docs"},
+		expect{
+			status: 200,
+			headers: map[string]string{
+				"Content-Security-Policy": httpsec.SwaggerUIPolicy,
+				"X-Frame-Options":         "DENY",
+			},
 		},
 	},
 	{
@@ -400,6 +556,9 @@ func Run(t *testing.T, h http.Handler) {
 				body = strings.NewReader(c.req.body)
 			}
 			r := httptest.NewRequest(c.req.method, c.req.path, body)
+			if c.req.unsized {
+				r.ContentLength = -1
+			}
 			for k, v := range c.req.headers {
 				r.Header.Set(k, v)
 			}
@@ -436,8 +595,11 @@ func Run(t *testing.T, h http.Handler) {
 				}
 			}
 			id := w.Header().Get(httpapi.RequestIDHeader)
-			if id == "" || strings.ContainsAny(id, " \n") {
-				t.Errorf("request id %q", id)
+			if len(id) != 36 {
+				t.Errorf("request id %q, want a UUID the server made", id)
+			}
+			if sent := c.req.headers["X-Request-Id"]; sent != "" && id == sent {
+				t.Errorf("the caller's request id %q was used", sent)
 			}
 
 			switch {
@@ -464,6 +626,11 @@ func Run(t *testing.T, h http.Handler) {
 						m["request_id"],
 						id,
 					)
+				}
+				// "<generated>" stands for the id the server made, which
+				// the check above already holds to the header's.
+				if m, ok := want.(map[string]any); ok && m["request_id"] == "<generated>" {
+					m["request_id"] = id
 				}
 				gotJSON, _ := json.Marshal(got)
 				wantJSON, _ := json.Marshal(want)
@@ -521,26 +688,28 @@ func RunLogs(t *testing.T, h http.Handler, logs *Logs) {
 	}{
 		{"success", "GET", "/v1/items/42?token=secret", "log-1",
 			"\x1b[94mGET\x1b[0m status:\x1b[32m200\x1b[0m latency:", " url:/v1/items/42",
-			map[string]any{"group": "api", "request_id": "log-1", "route": "/v1/items/:id"},
+			map[string]any{"group": "api", "route": "/v1/items/:id"},
 			[]string{"reason", "err"}},
 		{"unrouted", "GET", "/v1/nothing-here", "log-2",
 			"\x1b[94mGET\x1b[0m status:\x1b[33m404\x1b[0m latency:", " url:/v1/nothing-here",
-			map[string]any{"group": "api", "request_id": "log-2", "reason": "route-not-found"},
+			map[string]any{"group": "api", "reason": "route-not-found"},
 			[]string{"err"}},
 		{"server fault", "GET", "/v1/plain", "log-3",
 			"\x1b[94mGET\x1b[0m status:\x1b[31m500\x1b[0m latency:", " url:/v1/plain",
-			map[string]any{"group": "api", "request_id": "log-3", "reason": "internal", "err": "db down: host 10.0.0.5"},
+			map[string]any{"group": "api", "reason": "internal", "err": "db down: host 10.0.0.5"},
 			nil},
 		{"three-letter method", "POST", "/v1/password", "log-4",
 			"\x1b[92mPST\x1b[0m status:\x1b[32m200\x1b[0m latency:", " url:/v1/password",
-			map[string]any{"group": "api", "request_id": "log-4"},
+			map[string]any{"group": "api"},
 			nil},
 	} {
 		t.Run("log "+c.name, func(t *testing.T) {
 			logs.records(t) // drop anything earlier
 			r := httptest.NewRequest(c.method, c.path, nil)
 			r.Header.Set("X-Request-Id", c.reqID)
-			h.ServeHTTP(httptest.NewRecorder(), r)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			id := w.Header().Get(httpapi.RequestIDHeader)
 
 			var access map[string]any
 			for _, rec := range logs.records(t) {
@@ -554,6 +723,10 @@ func RunLogs(t *testing.T, h http.Handler, logs *Logs) {
 			msg, _ := access["msg"].(string)
 			if !strings.HasPrefix(msg, c.msgPrefix) || !strings.HasSuffix(msg, c.msgSuffix) {
 				t.Errorf("msg %q, want %q...%q", msg, c.msgPrefix, c.msgSuffix)
+			}
+			if access["request_id"] != id || id == c.reqID {
+				t.Errorf("request_id %v, want the response's %q and never the caller's %q",
+					access["request_id"], id, c.reqID)
 			}
 			if access["level"] != "INFO" {
 				t.Errorf("level %v", access["level"])
@@ -573,4 +746,47 @@ func RunLogs(t *testing.T, h http.Handler, logs *Logs) {
 			}
 		})
 	}
+
+	t.Run("log a skipped path that succeeds is left out", func(t *testing.T) {
+		logs.records(t)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/health", nil))
+		for _, rec := range logs.records(t) {
+			if rec["group"] == "api" {
+				t.Fatalf("access record for a skipped path: %v", rec)
+			}
+		}
+	})
+}
+
+// RunWithout checks a stack set up with httpapi.WithoutAccessLog() and
+// httpapi.WithoutRecovery(), on the routes GET /v1/items/:id and GET
+// /v1/panic as Run has them: nothing writes an access record, a panic reaches
+// the caller for the service's own recovery, and the response contract is
+// unchanged.
+func RunWithout(t *testing.T, h http.Handler, logs *Logs) {
+	t.Helper()
+
+	t.Run("without the access log", func(t *testing.T) {
+		logs.records(t)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/v1/items/42", nil))
+		if w.Code != 200 || w.Header().Get(httpapi.RequestIDHeader) == "" {
+			t.Fatalf("status %d, request id %q", w.Code, w.Header().Get(httpapi.RequestIDHeader))
+		}
+		for _, rec := range logs.records(t) {
+			if rec["group"] == "api" {
+				t.Fatalf("access record with the access log off: %v", rec)
+			}
+		}
+	})
+
+	t.Run("without recovery", func(t *testing.T) {
+		defer func() {
+			if v := recover(); v != "boom" {
+				t.Fatalf("recovered %v, want the handler's panic", v)
+			}
+		}()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/panic", nil))
+		t.Fatal("the panic was recovered with recovery off")
+	})
 }

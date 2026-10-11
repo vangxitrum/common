@@ -27,6 +27,7 @@ import (
 
 	"gitlab.internal/tuan.quang.tran/aioz-common/apierr"
 	"gitlab.internal/tuan.quang.tran/aioz-common/httpapi"
+	"gitlab.internal/tuan.quang.tran/aioz-common/httpsec"
 )
 
 var mon = monkit.Package()
@@ -34,8 +35,8 @@ var mon = monkit.Package()
 // Setup installs the standard stack on e, in this order:
 //
 //  1. client IP from the trusted proxies (c.RealIP)
-//  2. request id: the caller's when sane, else a new one; on the response,
-//     the context and every outbound call
+//  2. request id: a new one for every request, never the caller's; on the
+//     response, the context and every outbound call
 //  3. security headers and CORS, before routing so a preflight to any path is
 //     answered
 //  4. access log, which sees the status the error handler finally wrote
@@ -44,7 +45,12 @@ var mon = monkit.Package()
 //  7. per-route metrics
 //
 // and makes ErrorHandler e's error handler.
-func Setup(e *echo.Echo, log *slog.Logger, stack *httpapi.Stack) {
+//
+// opts leave out the access log, the panic recovery or the metrics, or keep
+// some paths out of the access log; see httpapi.Option. A route changes the
+// body limit with BodyLimit.
+func Setup(e *echo.Echo, log *slog.Logger, stack *httpapi.Stack, opts ...httpapi.Option) {
+	o := httpapi.NewOptions(opts...)
 	e.HideBanner = true
 	e.HidePort = true
 	e.HTTPErrorHandler = ErrorHandler(log)
@@ -60,17 +66,23 @@ func Setup(e *echo.Echo, log *slog.Logger, stack *httpapi.Stack) {
 			return next(c)
 		}
 	})
-	e.Use(
-		accessLog(log, stack.PlainLog),
-		recoverPanic,
-		bodyLimit(stack.BodyLimit),
-		metrics,
-	)
+	var chain []echo.MiddlewareFunc
+	if o.AccessLog() {
+		chain = append(chain, accessLog(log, stack.PlainLog, o))
+	}
+	if o.Recovery() {
+		chain = append(chain, recoverPanic)
+	}
+	chain = append(chain, bodyLimit(stack.BodyLimit))
+	if o.Metrics() {
+		chain = append(chain, metrics)
+	}
+	e.Use(chain...)
 }
 
 func requestID(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		id := httpapi.RequestID(c.Request())
+		id := httpapi.NewRequestID()
 		c.Response().Header().Set(httpapi.RequestIDHeader, id)
 		c.SetRequest(
 			c.Request().
@@ -80,7 +92,7 @@ func requestID(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-func accessLog(log *slog.Logger, plain bool) echo.MiddlewareFunc {
+func accessLog(log *slog.Logger, plain bool, o httpapi.Options) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			start := time.Now()
@@ -90,6 +102,9 @@ func accessLog(log *slog.Logger, plain bool) echo.MiddlewareFunc {
 				c.Error(err)
 			}
 			r := c.Request()
+			if !o.Logged(r.URL.Path, c.Response().Status) {
+				return nil
+			}
 			httpapi.LogAccess(r.Context(), log, httpapi.Access{
 				Method:    r.Method,
 				Path:      r.URL.Path,
@@ -190,6 +205,45 @@ func reasonOf(err error) string {
 	return body.Reason
 }
 
+// BodyLimit sets a route's request body limit in bytes, in place of the
+// stack's: higher for an upload, lower for a webhook. A limit of zero or less
+// is a programming error found when routes are registered, so it panics, like
+// Cache.
+func BodyLimit(limit int64) echo.MiddlewareFunc {
+	if limit <= 0 {
+		panic(httpapi.Error.Errorf("body limit must be positive, got %d", limit))
+	}
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if err := httpapi.SetBodyLimit(c.Response(), c.Request(), limit); err != nil {
+				return err
+			}
+			return next(c)
+		}
+	}
+}
+
+// ContentSecurityPolicy sets a route's or group's Content-Security-Policy in
+// place of the stack's, which lets nothing load and suits only JSON. Use it
+// on routes that serve a page, such as Swagger UI:
+//
+//	e.GET("/swagger/*", echoSwagger.WrapHandler, echoapi.ContentSecurityPolicy(httpsec.SwaggerUIPolicy))
+//
+// An invalid policy is a programming error found when routes are registered,
+// so it panics, like Cache.
+func ContentSecurityPolicy(policy string) echo.MiddlewareFunc {
+	csp, err := httpsec.NewContentSecurityPolicy(policy)
+	if err != nil {
+		panic(err)
+	}
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			csp.Apply(c.Response().Header())
+			return next(c)
+		}
+	}
+}
+
 // Cache applies a route's cache policy. An invalid policy is a programming
 // error found when routes are registered, so it panics, like
 // regexp.MustCompile.
@@ -215,12 +269,10 @@ func CheckETag(c echo.Context, etag string) bool {
 	return httpapi.CheckETag(c.Response(), c.Request(), etag)
 }
 
-// Bind decodes a JSON body strictly; see httpapi.DecodeJSON.
-func Bind(
-	c echo.Context,
-	v any,
-) error {
-	return httpapi.DecodeJSON(c.Request(), v)
+// Bind decodes a JSON body strictly, unless opts loosen it; see
+// httpapi.DecodeJSON.
+func Bind(c echo.Context, v any, opts ...httpapi.DecodeOption) error {
+	return httpapi.DecodeJSON(c.Request(), v, opts...)
 }
 
 // Page reads offset, limit and cursor; see httpapi.ParsePage.
