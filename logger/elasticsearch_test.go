@@ -303,7 +303,7 @@ func TestElasticsearchSink_IndexFieldsSplitIndexedFromShipped(t *testing.T) {
 	require.NotContains(t, doc["labels"], "part_number")
 }
 
-func TestElasticsearchSink_DefaultIndexFieldsAreServiceAndRole(t *testing.T) {
+func TestElasticsearchSink_DefaultIndexFieldsAreServiceRoleAndComponent(t *testing.T) {
 	recv := newBulkRecorder(t)
 	cfg := testESConfig(recv.URL)
 	cfg.BatchSize = 1
@@ -312,9 +312,10 @@ func TestElasticsearchSink_DefaultIndexFieldsAreServiceAndRole(t *testing.T) {
 	defer func() { _ = sink.Close() }()
 
 	require.NoError(t, sink.Handle(slog.LevelInfo, time.Now(), "m", map[string]any{
-		"service": "from-record",
-		"role":    "worker",
-		"other":   "x",
+		"service":   "from-record",
+		"role":      "worker",
+		"component": "crawler.noaa",
+		"other":     "x",
 	}))
 
 	_, _, docs := recv.snapshot()
@@ -324,7 +325,12 @@ func TestElasticsearchSink_DefaultIndexFieldsAreServiceAndRole(t *testing.T) {
 	require.Equal(t, "from-record", service["name"],
 		"a record attribute overrides what the config stamped")
 	require.Equal(t, "worker", service["role"])
-	require.Equal(t, "x", doc["log"].(map[string]any)["extra"].(map[string]any)["other"])
+
+	log := doc["log"].(map[string]any)
+	require.Equal(t, "crawler.noaa", log["logger"],
+		"a component is a logger name, which ECS keeps in log.logger")
+	require.Equal(t, "x", log["extra"].(map[string]any)["other"])
+	require.NotContains(t, doc, "labels")
 }
 
 func TestElasticsearchSink_RoleIsStampedOnEveryDocument(t *testing.T) {

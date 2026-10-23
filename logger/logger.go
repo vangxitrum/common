@@ -71,9 +71,10 @@ type Config struct {
 	// that level, whatever the process level is. It is how one noisy part of a
 	// service is quietened without losing the rest of its debug output.
 	//
-	// The innermost component wins, as it does for a nested named logger: a
-	// logger made With("component", "a").With("component", "b") is held to
-	// b's level, or to none if b has no entry.
+	// The innermost component wins: a logger made With("component", "a").
+	// With("component", "b") is held to b's level. A name with no entry falls
+	// back to its parent's, so "crawler" also covers the "crawler.noaa" that
+	// [Named] makes under it, unless "crawler.noaa" has an entry of its own.
 	ComponentLevels map[string]slog.Level
 }
 
@@ -96,11 +97,13 @@ type Handler struct {
 	async *asyncHandler
 	sinks []Sink
 
-	// levels is Config.ComponentLevels. threshold is the level this logger's
-	// component is held to, or nil when it has no component or its component
-	// has no entry. inGroup is set once WithGroup has been called: a
-	// "component" attribute inside a group names something else.
+	// levels is Config.ComponentLevels. component is this logger's name, the
+	// innermost "component" attribute it was given, and threshold the level
+	// that name is held to, or nil when it has no entry. inGroup is set once
+	// WithGroup has been called: a "component" attribute inside a group names
+	// something else.
 	levels    map[string]slog.Level
+	component string
 	threshold *slog.Level
 	inGroup   bool
 
@@ -180,7 +183,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 			return true
 		})
 		if component != "" {
-			if min, ok := h.levels[component]; ok && r.Level < min {
+			if min, ok := h.levelFor(component); ok && r.Level < min {
 				return nil
 			}
 		}
@@ -204,20 +207,62 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	clone := *h
 	clone.inner = h.inner.WithAttrs(attrs)
-	if len(h.levels) > 0 && !h.inGroup {
+	if !h.inGroup {
 		for _, a := range attrs {
 			if a.Key != componentKey {
 				continue
 			}
 			// The last one wins, and a component with no entry clears the
-			// threshold an outer one set.
+			// threshold an outer one set. The handlers below write it once:
+			// they collect attributes by key, so the innermost overwrites.
+			clone.component = a.Value.String()
 			clone.threshold = nil
-			if min, ok := h.levels[a.Value.String()]; ok {
+			if min, ok := h.levelFor(clone.component); ok {
 				clone.threshold = &min
 			}
 		}
 	}
 	return &clone
+}
+
+// levelFor returns the level a component is held to: its own entry in
+// ComponentLevels, or else its nearest parent's - crawler.noaa falls back to
+// crawler.
+func (h *Handler) levelFor(name string) (slog.Level, bool) {
+	for name != "" {
+		if min, ok := h.levels[name]; ok {
+			return min, true
+		}
+		i := strings.LastIndexByte(name, '.')
+		if i < 0 {
+			break
+		}
+		name = name[:i]
+	}
+	return 0, false
+}
+
+// Named returns l with name as its component, the "component" attribute that
+// ComponentLevels holds to a level and Elasticsearch indexes as log.logger.
+//
+// A name under a name is joined to it with a dot, so the line says where in
+// the service it came from:
+//
+//	crawler := logger.Named(log, "crawler")
+//	logger.Named(crawler, "noaa").Info("fetched") // component=crawler.noaa
+//
+// With("component", ...) still replaces the name rather than joining it. Inside
+// a group, and on a logger whose handler is not a [Handler], Named cannot see
+// the parent's name and is the same as With("component", name). An empty name
+// returns l unchanged.
+func Named(l *slog.Logger, name string) *slog.Logger {
+	if name == "" {
+		return l
+	}
+	if h, ok := l.Handler().(*Handler); ok && !h.inGroup && h.component != "" {
+		name = h.component + "." + name
+	}
+	return l.With(componentKey, name)
 }
 
 // WithGroup implements slog.Handler.

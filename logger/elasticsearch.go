@@ -87,9 +87,11 @@ type ElasticsearchConfig struct {
 
 // DefaultIndexFields are the attributes indexed when IndexFields is empty.
 //
-// Both name a dimension a dashboard splits by rather than a detail of one
-// event, which is what makes them worth a permanent mapping entry.
-var DefaultIndexFields = []string{"service", "role"}
+// Each names a dimension a dashboard splits by rather than a detail of one
+// event, which is what makes them worth a permanent mapping entry: the
+// service, its process, and the part of it - the [Named] logger - that wrote
+// the line.
+var DefaultIndexFields = []string{"service", "role", "component"}
 
 // ecsPaths are the attributes that have a home in ECS, which is where Kibana's
 // built-in views and the logs-* templates look for them. An indexed attribute
@@ -98,7 +100,10 @@ var ecsPaths = map[string][2]string{
 	"service": {"service", "name"},
 	"role":    {"service", "role"},
 	"env":     {"service", "environment"},
-	"host":    {"host", "name"},
+
+	// A logger's name, which is what a component is: see Named.
+	"component": {"log", "logger"},
+	"host":      {"host", "name"},
 }
 
 // elasticsearchSink ships records to Elasticsearch's _bulk API.
