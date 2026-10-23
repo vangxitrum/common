@@ -296,9 +296,11 @@ limit - a thousand by default - that a service inventing attribute names at
 runtime will eventually reach. `log.extra` is in `_source`, so it is there in
 Discover and in an API response; it just cannot be filtered or aggregated on.
 
-`IndexFields` empty takes `logger.DefaultIndexFields`, which is `service` and
-`role`. Both name a dimension a dashboard splits by rather than a detail of one
-event, which is what earns a permanent mapping entry. `env`, `region` and
+`IndexFields` empty takes `logger.DefaultIndexFields`, which is `service`,
+`role` and `component`. Each names a dimension a dashboard splits by rather
+than a detail of one event, which is what earns a permanent mapping entry.
+`component` - the [named logger](#named-loggers) - is written to `log.logger`,
+the ECS field for a logger's name. `env`, `region` and
 `group` are the usual additions. A request id is usually not one: there is one
 value per request, and correlation is what `trace.id` is for.
 
@@ -330,6 +332,40 @@ Sending the bearer token rather than a password is the point of the
 `BearerToken` field: a reverse proxy in front of Elasticsearch checks the token
 and swaps in the real credentials, so no Elasticsearch password is deployed
 alongside the service.
+
+## Named loggers
+
+A logger's name is its `component` attribute.
+`logger.Named` sets it, and a name under a name is joined to it with a dot, so
+a line says which part of the service wrote it:
+
+```go
+crawler := logger.Named(log, "crawler")
+noaa := logger.Named(crawler, "noaa")
+
+noaa.Info("fetched", "feed", "noaa_nwps_gauges")
+// [...] INF fetched feed=noaa_nwps_gauges component=crawler.noaa
+```
+
+The line carries the full name once, not every level of it.
+`With("component", ...)` still sets a name too, but replaces rather than
+joins: `logger.Named(log, "crawler").With("component", "grpc")` is `grpc`.
+A `component` on the record itself wins over both.
+
+The name is what `ComponentLevels` matches (the `CustomLevel` setting in
+`logging`).
+A name with no entry falls back to its parent's, so one entry covers a subtree:
+with `crawler=warn,crawler.grpc=debug`, `crawler.noaa` is held to warn and
+`crawler.grpc` logs at debug.
+
+In Elasticsearch the name is indexed by default, as `log.logger`, so
+`log.logger : crawler.*` in Kibana finds everything the crawler's named loggers
+wrote.
+
+Name a logger before `WithGroup`: inside a group, `component` names something
+else, so `Named` there is an ordinary attribute of the group.
+The same holds on a logger whose handler is not a `logger.Handler`, such as
+`logtest`'s, where `Named` cannot see the parent's name to join to.
 
 ## Context-aware fields
 
